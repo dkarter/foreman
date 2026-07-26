@@ -1,0 +1,159 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: release-please
+
+permissions: {}
+
+jobs:
+  release-please:
+    permissions:
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Generate release app token
+        id: release_app_token
+        # v3.2.0 is an immutable GitHub release.
+        uses: actions/create-github-app-token@v3.2.0
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Release Please
+        id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          # App-authored release PRs trigger the normal pull_request CI workflow.
+          token: ${{ steps.release_app_token.outputs.token }}
+
+  build-binaries:
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    needs: release-please
+    permissions:
+      artifact-metadata: write
+      attestations: write
+      contents: write
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Set up Go
+        # v7.0.0 is an immutable GitHub release.
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version: '1.25.12'
+
+      - name: Set up Node.js
+        # v7.0.0 is an immutable GitHub release.
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24.18.0'
+
+      - name: Install aube
+        run: npm install --global aube@1.29.1
+
+      - name: Install frontend dependencies
+        run: aube install --frozen-lockfile
+
+      - name: Run GoReleaser
+        # v7.2.3 is an immutable GitHub release.
+        uses: goreleaser/goreleaser-action@v7.2.3
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attest binary artifacts
+        # v4.2.0 is an immutable GitHub release.
+        uses: actions/attest@v4.2.0
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+
+  build-macos-app:
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    needs: release-please
+    permissions:
+      artifact-metadata: write
+      attestations: write
+      contents: write
+      id-token: write
+    runs-on: macos-15
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Set up Go
+        # v7.0.0 is an immutable GitHub release.
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version: '1.25.12'
+
+      - name: Set up Node.js
+        # v7.0.0 is an immutable GitHub release.
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24.18.0'
+
+      - name: Install aube
+        run: npm install --global aube@1.29.1
+
+      - name: Install frontend dependencies
+        run: aube install --frozen-lockfile
+
+      - name: Build universal macOS app
+        run: bash scripts/build-macos-app.sh "${{ needs.release-please.outputs.version }}"
+
+      - name: Upload macOS app
+        run: gh release upload "${{ needs.release-please.outputs.tag_name }}" dist/*.zip --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attest macOS app
+        # v4.2.0 is an immutable GitHub release.
+        uses: actions/attest@v4.2.0
+        with:
+          subject-path: dist/*.zip
+
+  publish:
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    needs:
+      - release-please
+      - build-binaries
+      - build-macos-app
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish immutable release
+        run: >-
+          gh release edit "${{ needs.release-please.outputs.tag_name }}"
+          --repo "$GITHUB_REPOSITORY"
+          --draft=false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
