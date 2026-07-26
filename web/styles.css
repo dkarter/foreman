@@ -240,8 +240,8 @@ h1 {
 }
 
 .agent-card.focused {
+  border-width: 2px;
   border-color: #e6e9dc;
-  box-shadow: inset 0 0 0 1px #e6e9dc;
 }
 
 .status-rail {
