@@ -9,10 +9,12 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -94,7 +96,7 @@ func parseProcMeminfo(output string) (used uint64, total uint64, ok bool) {
 	return total - available, total, true
 }
 
-func runSatellite(ctx context.Context, serverURL string) error {
+func runSatellite(ctx context.Context) error {
 	collector := &linuxMetricsCollector{}
 	credentialUpdates := make(chan struct{}, 1)
 	discovery := &discoveryManager{hosts: make(map[string]discoveredHost)}
@@ -106,7 +108,7 @@ func runSatellite(ctx context.Context, serverURL string) error {
 			discovery = &discoveryManager{hosts: make(map[string]discoveredHost)}
 		}
 	}
-	go serveSatelliteController(ctx, serverURL, discovery, credentialUpdates)
+	go serveSatelliteController(ctx, discovery, credentialUpdates)
 	for ctx.Err() == nil {
 		credential, err := loadSatelliteCredential()
 		if err != nil {
@@ -119,10 +121,11 @@ func runSatellite(ctx context.Context, serverURL string) error {
 		case <-credentialUpdates:
 		default:
 		}
-		selectedURL := serverURL
-		if credential.Endpoint != "" {
-			selectedURL = "ws://" + credential.Endpoint + "/satellite"
+		if credential.Endpoint == "" {
+			_ = os.Remove(satelliteCredentialPath())
+			continue
 		}
+		selectedURL := "wss://" + credential.Endpoint + "/satellite"
 		authenticatedURL, err := authenticatedSatelliteURL(selectedURL, credential)
 		if err != nil {
 			return err
@@ -142,7 +145,6 @@ func runSatellite(ctx context.Context, serverURL string) error {
 
 func serveSatelliteController(
 	ctx context.Context,
-	serverURL string,
 	discovery *discoveryManager,
 	credentialUpdates chan struct{},
 ) {
@@ -151,7 +153,13 @@ func serveSatelliteController(
 		log.Printf("Foreman credential receiver unavailable: %v", err)
 		return
 	}
+	defer listener.Close()
 	mux := http.NewServeMux()
+	dashboardHandler, err := embeddedDashboardHandler()
+	if err != nil {
+		log.Printf("Foreman dashboard unavailable: %v", err)
+		return
+	}
 	mux.HandleFunc("/api/discovery", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		hostname, _ := os.Hostname()
@@ -159,9 +167,11 @@ func serveSatelliteController(
 			"hosts": discovery.listReachable(r.Context()), "kioskName": hostname,
 		})
 	})
+	mux.Handle("/api/pairing/", selectedHostProxy(discovery, false))
+	mux.Handle("/ws", selectedHostProxy(discovery, true))
 	mux.HandleFunc("/credential", func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if !discovery.allowsOrigin(origin) && origin != satelliteDashboardOrigin(serverURL) {
+		if !controllerOrigin(origin) {
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return
 		}
@@ -175,6 +185,11 @@ func serveSatelliteController(
 			return
 		}
 		if r.Method == http.MethodDelete {
+			credential, loadErr := loadSatelliteCredential()
+			if loadErr == nil && credential.HostID != r.URL.Query().Get("host") {
+				http.Error(w, "another host is currently selected", http.StatusConflict)
+				return
+			}
 			if err := os.Remove(satelliteCredentialPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 				http.Error(w, "could not remove credential", http.StatusInternalServerError)
 				return
@@ -192,6 +207,16 @@ func serveSatelliteController(
 			http.Error(w, "invalid credential", http.StatusBadRequest)
 			return
 		}
+		if host, ok := discovery.get(r.URL.Query().Get("host")); !ok || host.ID != credential.HostID {
+			http.Error(w, "selected host does not match credential", http.StatusBadRequest)
+			return
+		} else {
+			credential.Endpoint = net.JoinHostPort(host.Address, strconv.Itoa(host.TLSPort))
+		}
+		if current, err := loadSatelliteCredential(); err == nil && reflect.DeepEqual(current, credential) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if err := saveSatelliteCredential(credential); err != nil {
 			http.Error(w, "could not save credential", http.StatusInternalServerError)
 			return
@@ -201,7 +226,7 @@ func serveSatelliteController(
 	})
 	mux.HandleFunc("/close", func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if !discovery.allowsOrigin(origin) && origin != satelliteDashboardOrigin(serverURL) {
+		if !controllerOrigin(origin) {
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return
 		}
@@ -223,7 +248,18 @@ func serveSatelliteController(
 			_ = exec.Command("pkill", "-f", `[c]hromium.*--kiosk.*(127\.0\.0\.1:4041|air\.local:4040)`).Run()
 		}()
 	})
-	mux.HandleFunc("/", serveDiscoveryPage)
+	mux.HandleFunc("/choose", serveDiscoveryPage)
+	mux.Handle("/assets/", dashboardHandler)
+	mux.Handle("/app.js", dashboardHandler)
+	mux.Handle("/styles.css", dashboardHandler)
+	mux.HandleFunc("/dashboard", func(w http.ResponseWriter, r *http.Request) {
+		clone := r.Clone(r.Context())
+		clone.URL.Path = "/"
+		dashboardHandler.ServeHTTP(w, clone)
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/choose", http.StatusTemporaryRedirect)
+	})
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 2 * time.Second}
 	go func() {
 		<-ctx.Done()
@@ -234,8 +270,55 @@ func serveSatelliteController(
 	}
 }
 
+func selectedHostProxy(discovery *discoveryManager, pinned bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hostID := r.URL.Query().Get("host")
+		host, ok := discovery.get(hostID)
+		if !ok {
+			http.Error(w, "selected Foreman host is unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		scheme := "http"
+		port := host.Port
+		var transport http.RoundTripper
+		if pinned || r.URL.Path == "/api/pairing/device" {
+			credential, err := loadSatelliteCredential()
+			if err != nil || credential.HostID != hostID {
+				http.Error(w, "pairing required", http.StatusUnauthorized)
+				return
+			}
+			client, err := pinnedHTTPClient(credential.TLSCertSHA256)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
+				return
+			}
+			scheme = "https"
+			port = host.TLSPort
+			transport = client.Transport
+			defer client.CloseIdleConnections()
+		}
+		target, _ := url.Parse(scheme + "://" + net.JoinHostPort(host.Address, strconv.Itoa(port)))
+		proxy := httputil.NewSingleHostReverseProxy(target)
+		if transport != nil {
+			proxy.Transport = transport
+		}
+		originalDirector := proxy.Director
+		proxy.Director = func(request *http.Request) {
+			originalDirector(request)
+			query := request.URL.Query()
+			query.Del("host")
+			request.URL.RawQuery = query.Encode()
+		}
+		proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
+			log.Printf("Foreman host proxy failed: %v", err)
+			http.Error(w, "secure connection to Foreman failed", http.StatusBadGateway)
+		}
+		proxy.ServeHTTP(w, r)
+	})
+}
+
 func serveDiscoveryPage(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
+	if r.URL.Path != "/choose" {
 		http.NotFound(w, r)
 		return
 	}
@@ -248,7 +331,7 @@ main{max-width:720px;margin:auto}h1{font-size:38px;margin-bottom:8px}p{color:#8f
 #hosts{display:grid;gap:12px;margin-top:28px}a{padding:20px;border:1px solid #3d4547;background:#111516;color:#f1f3ed;text-decoration:none;font-size:20px}
 a small{display:block;margin-top:6px;color:#48d597;font:12px ui-monospace,monospace}a:active{border-color:#48d597}
 </style></head><body><main><h1>Choose a Foreman Mac</h1><p>Discovered computers appear automatically. Pair once, then switch between them here.</p><div id="hosts"><p>Searching the local network...</p></div></main>
-<script>async function refresh(){try{const {hosts,kioskName}=await(await fetch('/api/discovery')).json();const list=document.querySelector('#hosts');list.replaceChildren();if(!hosts.length){const p=document.createElement('p');p.textContent='No Foreman computers found yet.';list.append(p);return}for(const h of hosts){const address=h.hostname||h.address;const a=document.createElement('a');a.href=` + "`" + `http://${address}:${h.port}/?kiosk=${encodeURIComponent(kioskName)}` + "`" + `;a.textContent=h.name;const small=document.createElement('small');small.textContent=address;a.append(small);list.append(a)}}catch{}}refresh();setInterval(refresh,2000)</script></body></html>`))
+<script>async function refresh(){try{const {hosts,kioskName}=await(await fetch('/api/discovery')).json();const list=document.querySelector('#hosts');list.replaceChildren();if(!hosts.length){const p=document.createElement('p');p.textContent='No Foreman computers found yet.';list.append(p);return}for(const h of hosts){const address=h.hostname||h.address;const a=document.createElement('a');a.href=` + "`" + `/dashboard?host=${encodeURIComponent(h.id)}&kiosk=${encodeURIComponent(kioskName)}` + "`" + `;a.textContent=h.name;const small=document.createElement('small');small.textContent=address;a.append(small);list.append(a)}}catch{}}refresh();setInterval(refresh,2000)</script></body></html>`))
 }
 
 func loadSatelliteCredential() (pairedDevice, error) {
@@ -257,7 +340,7 @@ func loadSatelliteCredential() (pairedDevice, error) {
 		return pairedDevice{}, err
 	}
 	var credential pairedDevice
-	if json.Unmarshal(data, &credential) != nil || !validCredential(credential) {
+	if json.Unmarshal(data, &credential) != nil || !validCredential(credential) || credential.Endpoint == "" {
 		return pairedDevice{}, errors.New("invalid saved satellite credential")
 	}
 	return credential, nil
@@ -277,13 +360,24 @@ func saveSatelliteCredential(credential pairedDevice) error {
 
 func validCredential(credential pairedDevice) bool {
 	secret, err := rawBase64.DecodeString(credential.Secret)
-	return err == nil && credential.ID != "" && len(secret) == 32
+	fingerprint, fingerprintErr := rawBase64.DecodeString(credential.TLSCertSHA256)
+	return err == nil && fingerprintErr == nil && credential.TransportVersion == 2 &&
+		credential.ID != "" && credential.HostID != "" &&
+		len(secret) == 32 && len(fingerprint) == 32
+}
+
+func controllerOrigin(origin string) bool {
+	parsed, err := url.Parse(origin)
+	return err == nil && parsed.Scheme == "http" && parsed.Host == "127.0.0.1:4041"
 }
 
 func authenticatedSatelliteURL(serverURL string, credential pairedDevice) (string, error) {
 	parsed, err := url.Parse(serverURL)
-	if err != nil {
-		return "", err
+	if err != nil || parsed.Scheme != "wss" {
+		return "", errors.New("satellite transport requires WSS")
+	}
+	if parsed.Host == "" {
+		return "", errors.New("satellite transport requires a host")
 	}
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 	nonce, err := randomValue(16)
@@ -299,22 +393,6 @@ func authenticatedSatelliteURL(serverURL string, credential pairedDevice) (strin
 	query.Set("signature", rawBase64.EncodeToString(signature))
 	parsed.RawQuery = query.Encode()
 	return parsed.String(), nil
-}
-
-func satelliteDashboardOrigin(serverURL string) string {
-	parsed, err := url.Parse(serverURL)
-	if err != nil {
-		return ""
-	}
-	if parsed.Scheme == "wss" {
-		parsed.Scheme = "https"
-	} else {
-		parsed.Scheme = "http"
-	}
-	parsed.Path = ""
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	return strings.TrimSuffix(parsed.String(), "/")
 }
 
 func satelliteCredentialPath() string {
@@ -334,7 +412,16 @@ func runSatelliteSession(
 	collector *linuxMetricsCollector,
 	credentialUpdates <-chan struct{},
 ) error {
-	conn, response, err := websocket.Dial(ctx, serverURL, nil)
+	credential, credentialErr := loadSatelliteCredential()
+	if credentialErr != nil {
+		return credentialErr
+	}
+	client, err := pinnedHTTPClient(credential.TLSCertSHA256)
+	if err != nil {
+		return err
+	}
+	defer client.CloseIdleConnections()
+	conn, response, err := websocket.Dial(ctx, serverURL, &websocket.DialOptions{HTTPClient: client})
 	if err != nil {
 		if response != nil {
 			if response.StatusCode == http.StatusUnauthorized {
@@ -389,27 +476,4 @@ func runSatelliteSession(
 		case <-timer.C:
 		}
 	}
-}
-
-func satelliteURL() string {
-	if configured := os.Getenv("FOREMAN_SERVER_URL"); configured != "" {
-		return resolveLocalHostname(configured)
-	}
-	return resolveLocalHostname("ws://air.local:4040/satellite")
-}
-
-func resolveLocalHostname(serverURL string) string {
-	const hostname = "air.local"
-	if !strings.Contains(serverURL, hostname) {
-		return serverURL
-	}
-	output, err := exec.Command("getent", "hosts", hostname).Output()
-	if err != nil {
-		return serverURL
-	}
-	fields := strings.Fields(string(output))
-	if len(fields) == 0 {
-		return serverURL
-	}
-	return strings.Replace(serverURL, hostname, fields[0], 1)
 }

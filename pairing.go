@@ -28,13 +28,15 @@ const pairingLifetime = 3 * time.Minute
 var rawBase64 = base64.RawURLEncoding
 
 type pairedDevice struct {
-	ID       string    `json:"id"`
-	Name     string    `json:"name"`
-	Secret   string    `json:"secret"`
-	PairedAt time.Time `json:"pairedAt"`
-	HostID   string    `json:"hostId,omitempty"`
-	HostName string    `json:"hostName,omitempty"`
-	Endpoint string    `json:"endpoint,omitempty"`
+	TransportVersion int       `json:"transportVersion"`
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	Secret           string    `json:"secret"`
+	PairedAt         time.Time `json:"pairedAt"`
+	HostID           string    `json:"hostId,omitempty"`
+	HostName         string    `json:"hostName,omitempty"`
+	Endpoint         string    `json:"endpoint,omitempty"`
+	TLSCertSHA256    string    `json:"tlsCertSha256"`
 }
 
 type pairingStore struct {
@@ -61,14 +63,16 @@ type pairingCredential struct {
 }
 
 type pairingManager struct {
-	mu           sync.Mutex
-	path         string
-	hostID       string
-	hostName     string
-	devices      map[string]pairedDevice
-	pending      map[string]*pendingPairing
-	nonces       map[string]time.Time
-	enabledUntil time.Time
+	mu             sync.Mutex
+	path           string
+	hostID         string
+	hostName       string
+	devices        map[string]pairedDevice
+	pending        map[string]*pendingPairing
+	nonces         map[string]time.Time
+	enabledUntil   time.Time
+	tlsFingerprint string
+	tlsPort        int
 }
 
 func newPairingManager(path string) (*pairingManager, error) {
@@ -221,8 +225,9 @@ func (manager *pairingManager) status(id string) (string, *pairingCredential, er
 			return "", nil, err
 		}
 		device := &pairedDevice{
-			ID: deviceID, Name: pending.Name, Secret: secret, PairedAt: time.Now().UTC(),
-			HostID: manager.hostID, HostName: manager.hostName,
+			TransportVersion: 2, ID: deviceID, Name: pending.Name, Secret: secret,
+			PairedAt: time.Now().UTC(), HostID: manager.hostID, HostName: manager.hostName,
+			TLSCertSHA256: manager.tlsFingerprint,
 		}
 		manager.devices[device.ID] = *device
 		if err := manager.saveLocked(); err != nil {
@@ -328,6 +333,23 @@ func (manager *pairingManager) complete(id string) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	delete(manager.pending, id)
+}
+
+func (manager *pairingManager) removeLegacyDevices() error {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	changed := false
+	for id, device := range manager.devices {
+		if device.TransportVersion < 2 {
+			delete(manager.devices, id)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	manager.nonces = make(map[string]time.Time)
+	return manager.saveLocked()
 }
 
 func (manager *pairingManager) authorize(r *http.Request, path string) bool {

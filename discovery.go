@@ -27,6 +27,7 @@ type discoveredHost struct {
 	Hostname string    `json:"hostname"`
 	Address  string    `json:"address"`
 	Port     int       `json:"port"`
+	TLSPort  int       `json:"tlsPort"`
 	LastSeen time.Time `json:"-"`
 }
 
@@ -44,7 +45,8 @@ func advertiseForeman(manager *pairingManager, port int) (func(), error) {
 	text := []string{
 		"id=" + hostID,
 		"name=" + hostName,
-		"protocol=1",
+		"protocol=2",
+		"tlsPort=" + strconv.Itoa(defaultTLSPort),
 	}
 	if runtime.GOOS == "darwin" {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -126,10 +128,14 @@ func (manager *discoveryManager) applyAvahiLine(line string) {
 		return
 	}
 	values := parseAvahiText(fields[9])
-	if values["id"] == "" || values["protocol"] != "1" {
+	if values["id"] == "" || values["protocol"] != "2" {
 		return
 	}
 	port, err := strconv.Atoi(fields[8])
+	if err != nil {
+		return
+	}
+	tlsPort, err := strconv.Atoi(values["tlsPort"])
 	if err != nil {
 		return
 	}
@@ -139,7 +145,8 @@ func (manager *discoveryManager) applyAvahiLine(line string) {
 	}
 	host := discoveredHost{
 		ID: values["id"], Name: name, Instance: instance,
-		Hostname: avahiUnescape(fields[6]), Address: fields[7], Port: port, LastSeen: time.Now(),
+		Hostname: avahiUnescape(fields[6]), Address: fields[7], Port: port, TLSPort: tlsPort,
+		LastSeen: time.Now(),
 	}
 	manager.mu.Lock()
 	manager.hosts[host.ID] = host
@@ -209,6 +216,13 @@ func (manager *discoveryManager) list() []discoveredHost {
 	return hosts
 }
 
+func (manager *discoveryManager) get(id string) (discoveredHost, bool) {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	host, ok := manager.hosts[id]
+	return host, ok
+}
+
 func (manager *discoveryManager) listReachable(ctx context.Context) []discoveredHost {
 	hosts := manager.list()
 	client := &http.Client{Timeout: 750 * time.Millisecond}
@@ -253,7 +267,7 @@ func discoveredHostFromEntry(entry *zeroconf.ServiceEntry) (discoveredHost, bool
 			values[key] = value
 		}
 	}
-	if values["id"] == "" || values["protocol"] != "1" {
+	if values["id"] == "" || values["protocol"] != "2" {
 		return discoveredHost{}, false
 	}
 	address := ""
@@ -270,10 +284,14 @@ func discoveredHostFromEntry(entry *zeroconf.ServiceEntry) (discoveredHost, bool
 	if name == "" {
 		name = strings.TrimSuffix(entry.Instance, ".")
 	}
+	tlsPort, err := strconv.Atoi(values["tlsPort"])
+	if err != nil {
+		return discoveredHost{}, false
+	}
 	return discoveredHost{
 		ID: values["id"], Name: name, Instance: strings.TrimSuffix(entry.Instance, "."),
 		Hostname: hostname, Address: address,
-		Port: entry.Port, LastSeen: time.Now(),
+		Port: entry.Port, TLSPort: tlsPort, LastSeen: time.Now(),
 	}, true
 }
 

@@ -5,7 +5,6 @@ Wants=network-online.target
 
 [Service]
 ExecStart=%h/.local/bin/foreman satellite
-Environment=FOREMAN_SERVER_URL=ws://air.local:4040/satellite
 Restart=always
 RestartSec=2
 

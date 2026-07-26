@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -515,6 +516,10 @@ func sleep(ctx context.Context, duration time.Duration) bool {
 }
 
 func (a *app) serveWebSocket(w http.ResponseWriter, r *http.Request) {
+	if !requestIsLoopback(r) && r.TLS == nil {
+		http.Error(w, "TLS required", http.StatusUpgradeRequired)
+		return
+	}
 	if !requestIsLoopback(r) && !a.pairing.authorize(r, "/ws") {
 		http.Error(w, "kiosk pairing required", http.StatusUnauthorized)
 		return
@@ -642,6 +647,10 @@ func (a *app) broadcastSatelliteSettings(interval int) {
 }
 
 func (a *app) serveSatellite(w http.ResponseWriter, r *http.Request) {
+	if r.TLS == nil {
+		http.Error(w, "TLS required", http.StatusUpgradeRequired)
+		return
+	}
 	if !a.pairing.authorize(r, "/satellite") {
 		http.Error(w, "kiosk pairing required", http.StatusUnauthorized)
 		return
@@ -840,10 +849,22 @@ func socketPath() string {
 	return filepath.Join(home, ".config", "herdr", "herdr.sock")
 }
 
+func embeddedDashboardHandler() (http.Handler, error) {
+	assets, err := fs.Sub(webAssets, "web")
+	if err != nil {
+		return nil, err
+	}
+	fileServer := http.FileServerFS(assets)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		fileServer.ServeHTTP(w, r)
+	}), nil
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "satellite" {
-		log.Printf("Foreman satellite connecting to %s", satelliteURL())
-		if err := runSatellite(context.Background(), satelliteURL()); err != nil {
+		log.Printf("Foreman satellite starting")
+		if err := runSatellite(context.Background()); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -862,6 +883,22 @@ func main() {
 		log.Fatalf("Could not load pairing state: %v", err)
 	}
 	app.pairing = pairing
+	hasTLSDevices := false
+	for _, device := range pairing.devices {
+		hasTLSDevices = hasTLSDevices || device.TransportVersion >= 2
+	}
+	identity, err := loadTLSIdentity(tlsIdentityPath(), pairing.hostID, pairing.hostName, hasTLSDevices)
+	if err != nil {
+		log.Fatalf("Could not load TLS identity: %v", err)
+	}
+	if err := pairing.removeLegacyDevices(); err != nil {
+		log.Fatalf("Could not migrate pairing state to TLS: %v", err)
+	}
+	if len(pairing.devices) > 0 && !hasTLSDevices {
+		log.Printf("Legacy kiosk pairings cleared; kiosks must pair once to trust the TLS identity")
+	}
+	app.pairing.tlsFingerprint = identity.Fingerprint
+	app.pairing.tlsPort = defaultTLSPort
 	app.configureSettings(settingsPath())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -875,7 +912,7 @@ func main() {
 	go app.monitor(ctx)
 	go app.monitorMetrics(ctx)
 
-	assets, err := fs.Sub(webAssets, "web")
+	dashboardHandler, err := embeddedDashboardHandler()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -888,11 +925,7 @@ func main() {
 	mux.HandleFunc("/satellite", app.serveSatellite)
 	mux.HandleFunc("/api/settings", app.serveSettings)
 	mux.HandleFunc("/api/pairing/", app.servePairing)
-	fileServer := http.FileServerFS(assets)
-	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-cache")
-		fileServer.ServeHTTP(w, r)
-	}))
+	mux.Handle("/", dashboardHandler)
 
 	server := &http.Server{
 		Addr:              addr,
@@ -900,8 +933,28 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	tlsServer := &http.Server{
+		Addr: ":4042", Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second,
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{identity.Certificate}, MinVersion: tls.VersionTLS13,
+		},
+	}
+	serverErrors := make(chan error, 2)
+	go func() {
+		log.Printf("Foreman TLS listening on %s", tlsServer.Addr)
+		serverErrors <- tlsServer.ListenAndServeTLS("", "")
+	}()
 	log.Printf("Foreman listening on %s (Herdr socket %s)", addr, socketPath())
-	if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
+	go func() {
+		serverErrors <- server.ListenAndServe()
+	}()
+	serverErr := <-serverErrors
+	cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	_ = server.Shutdown(shutdownCtx)
+	_ = tlsServer.Shutdown(shutdownCtx)
+	if !errors.Is(serverErr, http.ErrServerClosed) {
+		log.Printf("Foreman server failed: %v", serverErr)
 	}
 }

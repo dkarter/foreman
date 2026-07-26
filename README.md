@@ -26,9 +26,9 @@ To pair a kiosk:
 
 Each Mac can authorize multiple kiosks. A kiosk keeps a separate credential for every Mac, so **Settings → Switch Mac** reconnects to a previously paired computer without another code. The Mac menu can revoke one kiosk or all paired kiosks.
 
-Pairing uses ephemeral P-256 ECDH and displays a short authentication string to detect a person-in-the-middle. The resulting 256-bit device secret is encrypted during pairing and stored in files readable only by the current user. Dashboard and satellite WebSocket upgrades require a fresh HMAC signature, timestamp, and one-time nonce; revoked and replayed credentials are rejected.
+Pairing uses ephemeral P-256 ECDH and displays a short authentication string to detect a person-in-the-middle. The resulting 256-bit device secret and the Mac's TLS certificate fingerprint are encrypted during pairing. Dashboard and satellite traffic then use certificate-pinned TLS 1.3, while WebSocket upgrades additionally require a fresh HMAC signature, timestamp, and one-time nonce.
 
-The current LAN transport is `http://` and `ws://`. Authentication prevents unauthorized control, but message contents are not confidential from passive network observers. TLS is still required when confidentiality is part of the threat model.
+See [`docs/SECURITY.md`](docs/SECURITY.md) for the threat model, trust bootstrap, storage guarantees, and recovery behavior.
 
 ## Package build approval
 

@@ -51,10 +51,17 @@ interface DeviceCredential {
   hostId: string;
   hostName: string;
   endpoint?: string;
+  transportVersion: number;
+  tlsCertSha256: string;
 }
 
-const credentialKey = "foreman.deviceCredential";
-const localDashboard = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(location.hostname);
+const loopback = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(location.hostname);
+const kioskController = loopback && location.port === "4041";
+const localDashboard = loopback && !kioskController;
+const selectedHostId = new URLSearchParams(location.search).get("host") || "";
+const credentialKey = kioskController && selectedHostId
+  ? `foreman.deviceCredential.${selectedHostId}`
+  : "foreman.deviceCredential";
 
 const emptyMetrics: SystemMetrics = {
   cpu: null,
@@ -92,7 +99,8 @@ function useForemanSocket(showToast: (message: string, success: boolean) => void
   const [state, setState] = useState(initialState);
   const [credential, setCredentialState] = useState<DeviceCredential | undefined>(() => {
     try {
-      return JSON.parse(localStorage.getItem(credentialKey) || "") as DeviceCredential;
+      const saved = JSON.parse(localStorage.getItem(credentialKey) || "") as DeviceCredential;
+      return kioskController && saved.hostId !== selectedHostId ? undefined : saved;
     } catch {
       return undefined;
     }
@@ -108,10 +116,13 @@ function useForemanSocket(showToast: (message: string, success: boolean) => void
 
     const connect = async () => {
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      if (kioskController && credential) await provisionSatellite(credential);
       const authentication = credential ? await signedQuery(credential, "GET", "/ws") : "";
       if (stopped) return;
+      const query = new URLSearchParams(authentication);
+      if (kioskController) query.set("host", selectedHostId);
       const next = new WebSocket(
-        `${protocol}//${location.host}/ws${authentication ? `?${authentication}` : ""}`,
+        `${protocol}//${location.host}/ws${query.size ? `?${query}` : ""}`,
       );
       socket.current = next;
       next.addEventListener("open", () => {
@@ -135,7 +146,7 @@ function useForemanSocket(showToast: (message: string, success: boolean) => void
         if (credential) {
           try {
             const response = await fetch(
-              `/api/pairing/device?id=${encodeURIComponent(credential.id)}`,
+              pairingURL(`/api/pairing/device?id=${encodeURIComponent(credential.id)}`),
             );
             if (response.ok && !(await response.json() as { paired: boolean }).paired) {
               void deprovisionSatellite();
@@ -224,8 +235,8 @@ function App() {
   }, [state.settings.compactMode]);
 
   useEffect(() => {
-    if (credential) void provisionSatellite(credential);
-  }, [credential]);
+    if (kioskController && !selectedHostId) location.assign("/choose");
+  }, []);
 
   return (
     <>
@@ -245,7 +256,7 @@ function App() {
               onChange={updateSettings}
               onDone={() => setSettingsOpen(false)}
               onForget={forgetCredential}
-              onSwitch={() => location.assign("http://127.0.0.1:4041/")}
+              onSwitch={() => location.assign("/choose")}
               local={localDashboard}
             />
           )
@@ -476,7 +487,7 @@ function PairingPanel({ onPaired }: { onPaired: (credential: DeviceCredential) =
       setStatus("Creating a secure pairing request...");
       const privateKey = p256.utils.randomSecretKey();
       const clientPublicKey = p256.getPublicKey(privateKey, false);
-      const response = await fetch("/api/pairing/request", {
+      const response = await fetch(pairingURL("/api/pairing/request"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -506,7 +517,7 @@ function PairingPanel({ onPaired }: { onPaired: (credential: DeviceCredential) =
 
   const confirm = async () => {
     if (!request) return;
-    const response = await fetch("/api/pairing/confirm", {
+    const response = await fetch(pairingURL("/api/pairing/confirm"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: request.id }),
@@ -523,7 +534,9 @@ function PairingPanel({ onPaired }: { onPaired: (credential: DeviceCredential) =
   useEffect(() => {
     if (!request || !confirmed) return;
     const poll = window.setInterval(async () => {
-      const response = await fetch(`/api/pairing/status?id=${encodeURIComponent(request.id)}`);
+      const response = await fetch(
+        pairingURL(`/api/pairing/status?id=${encodeURIComponent(request.id)}`),
+      );
       if (!response.ok) return;
       const result = await response.json() as {
         status: string;
@@ -544,11 +557,12 @@ function PairingPanel({ onPaired }: { onPaired: (credential: DeviceCredential) =
         ).decrypt(decodeBase64(result.credential.ciphertext));
         const credential = JSON.parse(new TextDecoder().decode(plaintext)) as DeviceCredential;
         window.clearInterval(poll);
-        await fetch("/api/pairing/complete", {
+        await fetch(pairingURL("/api/pairing/complete"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: request.id }),
         });
+        if (kioskController) await provisionSatellite(credential);
         onPaired(credential);
       } catch {
         setStatus("The secure pairing response could not be verified.");
@@ -577,10 +591,10 @@ function PairingPanel({ onPaired }: { onPaired: (credential: DeviceCredential) =
 
 async function provisionSatellite(credential: DeviceCredential) {
   try {
-    await fetch("http://127.0.0.1:4041/credential", {
+    await fetch(`/credential?host=${encodeURIComponent(selectedHostId)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...credential, endpoint: location.host }),
+      body: JSON.stringify(credential),
     });
   } catch {
     // The dashboard remains usable if the optional resource reporter is not running.
@@ -588,7 +602,16 @@ async function provisionSatellite(credential: DeviceCredential) {
 }
 
 async function deprovisionSatellite() {
-  await fetch("http://127.0.0.1:4041/credential", { method: "DELETE" }).catch(() => {});
+  await fetch(`/credential?host=${encodeURIComponent(selectedHostId)}`, { method: "DELETE" }).catch(
+    () => {},
+  );
+}
+
+function pairingURL(path: string) {
+  if (!kioskController) return path;
+  const url = new URL(path, location.origin);
+  url.searchParams.set("host", selectedHostId);
+  return `${url.pathname}${url.search}`;
 }
 
 async function signedQuery(credential: DeviceCredential, method: string, path: string) {
@@ -676,9 +699,9 @@ function CloseDialog(props: {
     if (!props.open && dialog.current?.open) dialog.current.close();
   }, [props.open]);
   const close = async () => {
-    if (!localDashboard) {
+    if (kioskController) {
       try {
-        const response = await fetch("http://127.0.0.1:4041/close", { method: "POST" });
+        const response = await fetch("/close", { method: "POST" });
         if (response.ok) {
           window.setTimeout(() => props.onFailure("Could not close the kiosk", false), 1200);
           return;

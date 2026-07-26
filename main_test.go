@@ -8,14 +8,17 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -197,6 +200,8 @@ func TestPairingCeremonyAndAuthenticatedRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager.enable()
+	manager.tlsFingerprint, _ = randomValue(32)
+	manager.tlsPort = defaultTLSPort
 	clientKey, err := ecdh.P256().GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -246,6 +251,9 @@ func TestPairingCeremonyAndAuthenticatedRequest(t *testing.T) {
 	if json.Unmarshal(plaintext, &credential) != nil || credential.Name != "shop kiosk" {
 		t.Fatalf("unexpected credential: %#v", credential)
 	}
+	if credential.TLSCertSHA256 != manager.tlsFingerprint || credential.TransportVersion != 2 {
+		t.Fatalf("pairing credential is missing pinned TLS identity: %#v", credential)
+	}
 
 	timestamp := fmt.Sprint(time.Now().Unix())
 	nonceValue := "one-time-nonce"
@@ -274,7 +282,7 @@ func TestDiscoveryEntryUsesStableHostIdentity(t *testing.T) {
 		ServiceRecord: zeroconf.ServiceRecord{Instance: "Foreman on studio", Service: foremanService, Domain: "local."},
 		HostName:      "studio.local.",
 		Port:          4040,
-		Text:          []string{"id=host-123", "name=Studio Mac", "protocol=1"},
+		Text:          []string{"id=host-123", "name=Studio Mac", "protocol=2", "tlsPort=4042"},
 		AddrIPv4:      []net.IP{net.ParseIP("192.0.2.20")},
 	}
 	host, ok := discoveredHostFromEntry(entry)
@@ -286,7 +294,7 @@ func TestDiscoveryEntryUsesStableHostIdentity(t *testing.T) {
 func TestAvahiDiscoveryParsesAndRemovesHost(t *testing.T) {
 	t.Parallel()
 	manager := &discoveryManager{hosts: make(map[string]discoveredHost)}
-	manager.applyAvahiLine(`=;wlan0;IPv4;Foreman\032on\032air\.local;_foreman._tcp;local;air.local;10.0.0.80;4040;"protocol=1" "name=MacBook\032Air" "id=host-123"`)
+	manager.applyAvahiLine(`=;wlan0;IPv4;Foreman\032on\032air\.local;_foreman._tcp;local;air.local;10.0.0.80;4040;"protocol=2" "tlsPort=4042" "name=MacBook\032Air" "id=host-123"`)
 	hosts := manager.list()
 	if len(hosts) != 1 || hosts[0].Name != "MacBook Air" || hosts[0].dashboardURL() != "http://air.local:4040" {
 		t.Fatalf("unexpected Avahi host: %#v", hosts)
@@ -361,5 +369,78 @@ func TestPairingRetryReplacesRequestFromSameKiosk(t *testing.T) {
 	otherKey, _ := ecdh.P256().GenerateKey(rand.Reader)
 	if _, _, err := manager.begin("Office", rawBase64.EncodeToString(otherKey.PublicKey().Bytes()), "192.0.2.11:1000"); err == nil {
 		t.Fatal("a different kiosk replaced the pending request")
+	}
+}
+
+func TestTLSIdentityPersistsAndPinRejectsDifferentHost(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "tls-identity.json")
+	identity, err := loadTLSIdentity(path, "host-1", "studio", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := loadTLSIdentity(path, "host-1", "studio", true)
+	if err != nil || reloaded.Fingerprint != identity.Fingerprint {
+		t.Fatalf("TLS identity did not persist: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("TLS identity permissions = %v", info.Mode().Perm())
+	}
+
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{identity.Certificate}, MinVersion: tls.VersionTLS13}
+	server.StartTLS()
+	defer server.Close()
+	client, err := pinnedHTTPClient(identity.Fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Get(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	wrongPin, _ := randomValue(32)
+	wrongClient, _ := pinnedHTTPClient(wrongPin)
+	if _, err := wrongClient.Get(server.URL); err == nil {
+		t.Fatal("client accepted a different TLS certificate pin")
+	}
+}
+
+func TestAuthenticatedSatelliteURLRequiresWSS(t *testing.T) {
+	t.Parallel()
+	secret, _ := randomValue(32)
+	credential := pairedDevice{ID: "device-1", Secret: secret}
+	if _, err := authenticatedSatelliteURL("ws://host.test/satellite", credential); err == nil {
+		t.Fatal("plaintext satellite URL was accepted")
+	}
+	result, err := authenticatedSatelliteURL("wss://host.test/satellite", credential)
+	if err != nil || !strings.HasPrefix(result, "wss://host.test/satellite?") {
+		t.Fatalf("authenticated WSS URL = %q, %v", result, err)
+	}
+}
+
+func TestRemoveLegacyDevicesPreservesTLSDevices(t *testing.T) {
+	t.Parallel()
+	manager, err := newPairingManager(filepath.Join(t.TempDir(), "pairing.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.devices["legacy"] = pairedDevice{ID: "legacy", TransportVersion: 1}
+	manager.devices["current"] = pairedDevice{ID: "current", TransportVersion: 2}
+	if err := manager.removeLegacyDevices(); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := manager.devices["legacy"]; exists {
+		t.Fatal("legacy device was preserved")
+	}
+	if _, exists := manager.devices["current"]; !exists {
+		t.Fatal("TLS device was removed")
 	}
 }
