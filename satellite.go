@@ -171,17 +171,29 @@ func serveSatelliteController(
 	mux.Handle("/ws", selectedHostProxy(discovery, true))
 	mux.HandleFunc("/credential", func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if !controllerOrigin(origin) {
+		if origin != "" && !controllerOrigin(origin) {
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return
 		}
-		w.Header().Set("Access-Control-Allow-Origin", origin)
+		if origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
 		w.Header().Set("Access-Control-Allow-Private-Network", "true")
 		w.Header().Set("Vary", "Origin")
 		if r.Method == http.MethodOptions {
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 			w.Header().Set("Access-Control-Allow-Methods", http.MethodPost+", "+http.MethodDelete)
 			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method == http.MethodGet {
+			credential, err := loadSatelliteCredential()
+			if err != nil || credential.HostID != r.URL.Query().Get("host") {
+				http.Error(w, "pairing not found", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(credential)
 			return
 		}
 		if r.Method == http.MethodDelete {

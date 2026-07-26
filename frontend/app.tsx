@@ -105,7 +105,21 @@ function useForemanSocket(showToast: (message: string, success: boolean) => void
       return undefined;
     }
   });
+  const [restoringCredential, setRestoringCredential] = useState(kioskController && !credential);
   const socket = useRef<WebSocket | undefined>(undefined);
+
+  useEffect(() => {
+    if (!restoringCredential) return;
+    void fetch(`/credential?host=${encodeURIComponent(selectedHostId)}`)
+      .then(async (response) => {
+        if (!response.ok) return;
+        const saved = await response.json() as DeviceCredential;
+        if (saved.hostId !== selectedHostId) return;
+        localStorage.setItem(credentialKey, JSON.stringify(saved));
+        setCredentialState(saved);
+      })
+      .finally(() => setRestoringCredential(false));
+  }, []);
 
   useEffect(() => {
     let stopped = false;
@@ -207,6 +221,7 @@ function useForemanSocket(showToast: (message: string, success: boolean) => void
   return {
     state,
     credential,
+    restoringCredential,
     setCredential,
     forgetCredential,
     focus,
@@ -227,8 +242,15 @@ function App() {
     window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(undefined), 1600);
   }, []);
-  const { state, credential, setCredential, forgetCredential, focus, updateSettings } =
-    useForemanSocket(showToast);
+  const {
+    state,
+    credential,
+    restoringCredential,
+    setCredential,
+    forgetCredential,
+    focus,
+    updateSettings,
+  } = useForemanSocket(showToast);
 
   useEffect(() => {
     document.body.classList.toggle("compact-mode", state.settings.compactMode);
@@ -247,7 +269,14 @@ function App() {
           onSettings={() => setSettingsOpen(true)}
           onClose={() => setCloseOpen(true)}
         />
-        {!credential && !localDashboard
+        {restoringCredential
+          ? (
+            <section class="pairing-panel">
+              <span class="pairing-eyebrow">SECURE DEVICE LINK</span>
+              <h2>Restoring pairing...</h2>
+            </section>
+          )
+          : !credential && !localDashboard
           ? <PairingPanel onPaired={setCredential} />
           : settingsOpen
           ? (
