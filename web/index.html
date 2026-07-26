@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#090b0d" />
+    <title>Foreman</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <div class="brand-block">
+          <span class="eyebrow">HERDR CONTROL</span>
+          <h1>FOREMAN</h1>
+        </div>
+        <div class="header-controls">
+          <div class="telemetry" aria-label="Agent summary">
+            <div><strong id="working-count">0</strong><span>ACTIVE</span></div>
+            <div id="attention-stat">
+              <strong id="attention-count">0</strong><span>NEEDS INPUT</span>
+            </div>
+            <div class="link-state" id="link-state"><i></i><span>CONNECTING</span></div>
+          </div>
+          <button class="close-button" id="close-button" type="button" aria-label="Close Foreman">
+            ×
+          </button>
+        </div>
+      </header>
+
+      <section class="agent-grid" id="agent-grid" aria-live="polite">
+        <div class="empty-state">
+          <span class="scanner"></span>
+          <p>Waiting for Herdr telemetry</p>
+        </div>
+      </section>
+
+      <footer>
+        <div class="resource-metrics" aria-label="Resource usage">
+          <span>HOST <b id="host-cpu">--</b> CPU <b id="host-ram">--</b> RAM</span>
+          <span>FOREMAN <b id="foreman-cpu">--</b> CPU <b id="foreman-ram">--</b> RAM</span>
+        </div>
+        <time id="clock"></time>
+      </footer>
+    </main>
+    <div class="toast" id="toast" role="status"></div>
+    <dialog class="close-dialog" id="close-dialog">
+      <p>Close Foreman for the day?</p>
+      <div>
+        <button id="cancel-close" type="button">Keep open</button>
+        <button class="confirm-close" id="confirm-close" type="button">Close kiosk</button>
+      </div>
+    </dialog>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

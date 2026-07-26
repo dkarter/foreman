@@ -1,0 +1,7 @@
+/bin/
+/coverage.out
+/tmp/
+
+# Local Varlock values may contain secrets; commit only their schema.
+.env*
+!.env.schema

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>dev.herdr.foreman</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/Users/dorian/dev/foreman/bin/foreman</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>FOREMAN_ADDR</key>
+      <string>:4040</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true />
+    <key>KeepAlive</key>
+    <true />
+    <key>StandardOutPath</key>
+    <string>/Users/dorian/Library/Logs/foreman.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/dorian/Library/Logs/foreman.log</string>
+  </dict>
+</plist>

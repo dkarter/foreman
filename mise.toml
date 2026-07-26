@@ -1,0 +1,59 @@
+[tools]
+"github:crate-ci/committed" = "latest"
+dprint = "latest"
+fnox = "latest"
+gitleaks = "latest"
+go = "1.25.12"
+lefthook = "latest"
+pitchfork = "latest"
+"github:dmno-dev/varlock" = "1.13.0"
+
+[hooks]
+postinstall = "lefthook install"
+
+[tasks.fmt]
+description = "Formats all supported files"
+run = "dprint fmt"
+
+[tasks.fmt-check]
+description = "Checks formatting and fails on differences"
+run = "dprint check"
+
+[tasks.test]
+description = "Runs the test suite"
+run = "go test ./..."
+
+[tasks.build]
+description = "Builds the lightweight Foreman server"
+run = "mkdir -p bin && go build -trimpath -ldflags='-s -w' -o bin/foreman ."
+
+[tasks.serve]
+description = "Runs Foreman on the host"
+run = "go run ."
+
+[tasks.install-host]
+description = "Builds and installs Foreman as a macOS user service"
+depends = ["build"]
+run = '''cp deploy/dev.herdr.foreman.plist "$HOME/Library/LaunchAgents/dev.herdr.foreman.plist"
+launchctl bootout "gui/$UID/dev.herdr.foreman" >/dev/null 2>&1 || true
+launchctl bootstrap "gui/$UID" "$HOME/Library/LaunchAgents/dev.herdr.foreman.plist"'''
+
+[tasks.install-kiosk]
+description = "Installs the Foreman Chromium kiosk on the Raspberry Pi"
+run = '''ssh foreman 'mkdir -p "$HOME/.config/autostart"'
+scp deploy/foreman-kiosk.desktop foreman:.config/autostart/foreman-kiosk.desktop'''
+
+[tasks.ssh]
+description = "Opens an SSH console on the Raspberry Pi"
+run = "ssh foreman"
+
+[tasks.vnc]
+description = "Forwards local port 5900 to Foreman's local-only VNC server"
+run = "ssh -N -L 5900:127.0.0.1:5900 foreman"
+
+[tasks.vnc-open]
+description = "Opens Foreman in TigerVNC over SSH"
+run = '''if ! nc -z 127.0.0.1 5900; then
+  ssh -fN -o ExitOnForwardFailure=yes -L 5900:127.0.0.1:5900 foreman
+fi
+open -a TigerVNC --args localhost::5900'''
