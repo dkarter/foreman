@@ -9,6 +9,17 @@ private let settingsURL = URL(string: "http://127.0.0.1:4040/api/settings")!
 private let pairingURL = URL(string: "http://127.0.0.1:4040/api/pairing/control")!
 private let pollIntervals = [5, 10, 30, 60]
 
+private struct KnownTerminal {
+    let name: String
+    let bundleID: String
+}
+
+private let knownTerminals = [
+    KnownTerminal(name: "Ghostty", bundleID: "com.mitchellh.ghostty"),
+    KnownTerminal(name: "iTerm2", bundleID: "com.googlecode.iterm2"),
+    KnownTerminal(name: "WezTerm", bundleID: "com.github.wez.wezterm"),
+]
+
 private enum AgentSummary: String {
     case idle
     case done
@@ -49,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var startItem: NSMenuItem!
     private var stopItem: NSMenuItem!
     private var pollingItems: [NSMenuItem] = []
+    private var terminalAppItem: NSMenuItem!
     private var allowPairingItem: NSMenuItem!
     private var pairingItem: NSMenuItem!
     private var pairedKiosksItem: NSMenuItem!
@@ -59,6 +71,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lightStatusImage: NSImage?
     private var darkStatusImage: NSImage?
     private var interval = 5
+    private var terminalApp = ""
+    private var terminalMenuSignature = ""
     private var agentSummary: AgentSummary?
     private var indicatorVisible = true
     private var pendingPairingID: String?
@@ -133,6 +147,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let pollingRoot = NSMenuItem(title: "Resource Polling", action: nil, keyEquivalent: "")
         pollingRoot.submenu = pollingMenu
         menu.addItem(pollingRoot)
+
+        terminalAppItem = NSMenuItem(title: "Focus Terminal", action: nil, keyEquivalent: "")
+        terminalAppItem.submenu = NSMenu()
+        menu.addItem(terminalAppItem)
+        updateTerminalMenu()
         menu.addItem(.separator())
 
         allowPairingItem = item("Allow New Kiosk...", #selector(enablePairing))
@@ -174,6 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
             }
             let seconds = state?["pollIntervalSeconds"] as? Int
+            let terminalApp = state?["terminalApp"] as? String
             let summary = (state?["agentStatus"] as? String).flatMap(AgentSummary.init(rawValue:))
             DispatchQueue.main.async {
                 self?.setRunning(healthy)
@@ -181,6 +201,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let seconds {
                     self?.interval = seconds
                     self?.updatePollingChecks()
+                }
+                if let terminalApp {
+                    self?.terminalApp = terminalApp
+                    self?.updateTerminalMenu()
                 }
             }
         }.resume()
@@ -326,6 +350,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pollingItems.forEach { $0.state = $0.tag == interval ? .on : .off }
     }
 
+    private func updateTerminalMenu() {
+        var runningApps: [String: NSRunningApplication] = [:]
+        for app in NSWorkspace.shared.runningApplications {
+            if let bundleID = app.bundleIdentifier {
+                runningApps[bundleID] = app
+            }
+        }
+        let terminals = knownTerminals.map { terminal in
+            (
+                terminal,
+                runningApps[terminal.bundleID],
+                NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminal.bundleID) != nil
+            )
+        }
+        let signature = ([terminalApp] + terminals.map {
+            "\($0.0.bundleID):\($0.1 != nil):\($0.2)"
+        }).joined(separator: "|")
+        guard signature != terminalMenuSignature else { return }
+        terminalMenuSignature = signature
+
+        let menu = NSMenu()
+        let disabledItem = item("Disabled", #selector(setTerminalApp(_:)))
+        disabledItem.representedObject = ""
+        disabledItem.state = terminalApp.isEmpty ? .on : .off
+        menu.addItem(disabledItem)
+        menu.addItem(.separator())
+
+        for (terminal, running, installed) in terminals {
+            guard installed || running != nil || terminal.bundleID == terminalApp else { continue }
+            let terminalItem = item(terminal.name, #selector(setTerminalApp(_:)))
+            terminalItem.representedObject = terminal.bundleID
+            terminalItem.state = terminal.bundleID == terminalApp ? .on : .off
+            terminalItem.isEnabled = installed || running != nil
+            if let icon = running?.icon?.copy() as? NSImage {
+                icon.size = NSSize(width: 16, height: 16)
+                terminalItem.image = icon
+            }
+            menu.addItem(terminalItem)
+        }
+        terminalAppItem.submenu = menu
+    }
+
     @objc private func openDashboard() {
         NSWorkspace.shared.open(dashboardURL)
     }
@@ -352,11 +418,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard pollIntervals.contains(sender.tag) else { return }
         interval = sender.tag
         updatePollingChecks()
+        updateSettings(["pollIntervalSeconds": interval])
+    }
+
+    @objc private func setTerminalApp(_ sender: NSMenuItem) {
+        guard let bundleID = sender.representedObject as? String else { return }
+        updateSettings(["terminalApp": bundleID])
+    }
+
+    private func updateSettings(_ values: [String: Any]) {
         var request = URLRequest(url: settingsURL)
         request.httpMethod = "PUT"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["pollIntervalSeconds": interval])
-        URLSession.shared.dataTask(with: request).resume()
+        request.httpBody = try? JSONSerialization.data(withJSONObject: values)
+        URLSession.shared.dataTask(with: request) { [weak self] _, _, _ in
+            DispatchQueue.main.async { self?.checkHealth() }
+        }.resume()
     }
 
     private func runControl(_ operation: @escaping @Sendable () -> (Bool, String)) {

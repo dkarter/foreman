@@ -738,9 +738,11 @@ footer time {
 
 @keyframes attention-card {
   from {
+    background: rgba(17, 20, 22, 0.94);
     box-shadow: inset 0 0 0 1px rgba(255, 90, 95, 0.15);
   }
   to {
+    background: rgba(58, 17, 20, 0.94);
     box-shadow: inset 0 0 0 1px #ff5a5f, 0 0 15px rgba(255, 90, 95, 0.4);
   }
 }

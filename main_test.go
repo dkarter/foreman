@@ -227,11 +227,35 @@ func TestSettingsPersist(t *testing.T) {
 	app.settingsFile = path
 	poll := 30
 	compact := true
-	if err := app.applySettings(settingsUpdate{PollIntervalSeconds: &poll, CompactMode: &compact}); err != nil {
+	terminal := "com.github.wez.wezterm"
+	if err := app.applySettings(settingsUpdate{
+		PollIntervalSeconds: &poll,
+		CompactMode:         &compact,
+		TerminalApp:         &terminal,
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := loadSettings(path); got.PollIntervalSeconds != 30 || !got.CompactMode {
+	if got := loadSettings(path); got.PollIntervalSeconds != 30 || !got.CompactMode ||
+		got.TerminalApp != terminal {
 		t.Fatalf("unexpected persisted settings: %#v", got)
+	}
+	unsupported := "com.example.terminal"
+	if err := app.applySettings(settingsUpdate{TerminalApp: &unsupported}); err == nil {
+		t.Fatal("unsupported terminal app should be rejected")
+	}
+}
+
+func TestLoadSettingsAddsDefaultTerminalToExistingSettings(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"pollIntervalSeconds":10,"compactMode":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	settings := loadSettings(path)
+	if settings.TerminalApp != defaultTerminalApp || settings.PollIntervalSeconds != 10 ||
+		!settings.CompactMode {
+		t.Fatalf("unexpected migrated settings: %#v", settings)
 	}
 }
 

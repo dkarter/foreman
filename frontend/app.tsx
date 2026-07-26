@@ -7,6 +7,7 @@ import { Component, type ComponentChildren, render } from "preact";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
 type AgentStatus = "working" | "blocked" | "done" | "idle";
+const agentStatuses: AgentStatus[] = ["working", "blocked", "done", "idle"];
 
 interface Agent {
   paneId: string;
@@ -34,6 +35,7 @@ interface Metrics {
 interface Settings {
   pollIntervalSeconds: 5 | 10 | 30 | 60;
   compactMode: boolean;
+  terminalApp: string;
 }
 
 interface DashboardState {
@@ -58,7 +60,14 @@ interface DeviceCredential {
 const loopback = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(location.hostname);
 const kioskController = loopback && location.port === "4041";
 const localDashboard = loopback && !kioskController;
-const selectedHostId = new URLSearchParams(location.search).get("host") || "";
+const query = new URLSearchParams(location.search);
+const selectedHostId = query.get("host") || "";
+const preview = query.get("preview");
+const previewStatuses: AgentStatus[] = preview === "all"
+  ? agentStatuses
+  : agentStatuses.includes(preview as AgentStatus)
+  ? [preview as AgentStatus]
+  : [];
 const credentialKey = kioskController && selectedHostId
   ? `foreman.deviceCredential.${selectedHostId}`
   : "foreman.deviceCredential";
@@ -74,8 +83,18 @@ const initialState: DashboardState = {
   connected: false,
   agents: [],
   metrics: { host: emptyMetrics, foreman: emptyMetrics, foremanConnected: false },
-  settings: { pollIntervalSeconds: 5, compactMode: false },
+  settings: { pollIntervalSeconds: 5, compactMode: false, terminalApp: "" },
 };
+
+const previewAgents: Agent[] = previewStatuses.map((status, index) => ({
+  paneId: `preview-${status}`,
+  workspace: "foreman-preview",
+  kind: ["opencode", "claude", "codex", "gemini"][index],
+  status,
+  title: `${status[0].toUpperCase()}${status.slice(1)} agent state`,
+  cwd: "/tmp/foreman-preview",
+  focused: status === "working",
+}));
 
 const agentIcons: Record<string, string> = {
   amp: "amp.png",
@@ -150,6 +169,9 @@ function useForemanSocket(showToast: (message: string, success: boolean) => void
         }
         if (message.type === "focusResult") {
           showToast(message.ok ? "Pane focused" : message.error || "Focus failed", message.ok);
+        }
+        if (message.type === "terminalResult" && !message.ok) {
+          showToast(message.error || "Terminal activation failed", false);
         }
         if (message.type === "settingsResult" && !message.ok) {
           showToast(message.error || "Settings failed", false);
@@ -231,9 +253,7 @@ function useForemanSocket(showToast: (message: string, success: boolean) => void
 
 function App() {
   const [toast, setToast] = useState<{ message: string; success: boolean }>();
-  const [settingsOpen, setSettingsOpen] = useState(() =>
-    new URLSearchParams(location.search).has("settings")
-  );
+  const [settingsOpen, setSettingsOpen] = useState(() => query.has("settings"));
   const [closeOpen, setCloseOpen] = useState(false);
   const toastTimer = useRef(0);
 
@@ -251,25 +271,30 @@ function App() {
     focus,
     updateSettings,
   } = useForemanSocket(showToast);
+  const agents = previewAgents.length > 0 ? previewAgents : state.agents;
 
   useEffect(() => {
     document.body.classList.toggle("compact-mode", state.settings.compactMode);
   }, [state.settings.compactMode]);
 
   useEffect(() => {
-    if (kioskController && !selectedHostId) location.assign("/choose");
+    if (kioskController && !selectedHostId && previewAgents.length === 0) {
+      location.assign("/choose");
+    }
   }, []);
 
   return (
     <>
       <main class="shell">
         <Header
-          agents={state.agents}
+          agents={agents}
           connected={state.connected}
           onSettings={() => setSettingsOpen(true)}
           onClose={() => setCloseOpen(true)}
         />
-        {restoringCredential
+        {previewAgents.length > 0
+          ? <AgentGrid agents={agents} onFocus={() => {}} />
+          : restoringCredential
           ? (
             <section class="pairing-panel">
               <span class="pairing-eyebrow">SECURE DEVICE LINK</span>
@@ -289,7 +314,7 @@ function App() {
               local={localDashboard}
             />
           )
-          : <AgentGrid agents={state.agents} onFocus={focus} />}
+          : <AgentGrid agents={agents} onFocus={focus} />}
         <Footer metrics={state.metrics} />
       </main>
       {toast && (
@@ -398,7 +423,7 @@ function AgentCard(
     });
   }, []);
 
-  const status: AgentStatus = ["working", "blocked", "done", "idle"].includes(agent.status)
+  const status: AgentStatus = agentStatuses.includes(agent.status)
     ? agent.status
     : "idle";
   const workspace = agent.workspace || agent.cwd.split("/").at(-1);

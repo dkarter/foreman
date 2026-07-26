@@ -8,23 +8,37 @@ import (
 )
 
 const defaultPollInterval = 5
+const defaultTerminalApp = "com.mitchellh.ghostty"
+
+var terminalApps = map[string]bool{
+	"":                       true,
+	"com.mitchellh.ghostty":  true,
+	"com.googlecode.iterm2":  true,
+	"com.github.wez.wezterm": true,
+}
 
 type appSettings struct {
-	PollIntervalSeconds int  `json:"pollIntervalSeconds"`
-	CompactMode         bool `json:"compactMode"`
+	PollIntervalSeconds int    `json:"pollIntervalSeconds"`
+	CompactMode         bool   `json:"compactMode"`
+	TerminalApp         string `json:"terminalApp"`
 }
 
 type settingsUpdate struct {
-	PollIntervalSeconds *int  `json:"pollIntervalSeconds"`
-	CompactMode         *bool `json:"compactMode"`
+	PollIntervalSeconds *int    `json:"pollIntervalSeconds"`
+	CompactMode         *bool   `json:"compactMode"`
+	TerminalApp         *string `json:"terminalApp"`
 }
 
 func defaultSettings() appSettings {
-	return appSettings{PollIntervalSeconds: defaultPollInterval}
+	return appSettings{PollIntervalSeconds: defaultPollInterval, TerminalApp: defaultTerminalApp}
 }
 
 func validPollInterval(seconds int) bool {
 	return seconds == 5 || seconds == 10 || seconds == 30 || seconds == 60
+}
+
+func validTerminalApp(bundleID string) bool {
+	return terminalApps[bundleID]
 }
 
 func loadSettings(path string) appSettings {
@@ -33,7 +47,8 @@ func loadSettings(path string) appSettings {
 	if err != nil {
 		return settings
 	}
-	if json.Unmarshal(data, &settings) != nil || !validPollInterval(settings.PollIntervalSeconds) {
+	if json.Unmarshal(data, &settings) != nil || !validPollInterval(settings.PollIntervalSeconds) ||
+		!validTerminalApp(settings.TerminalApp) {
 		return defaultSettings()
 	}
 	return settings
@@ -42,6 +57,9 @@ func loadSettings(path string) appSettings {
 func saveSettings(path string, settings appSettings) error {
 	if !validPollInterval(settings.PollIntervalSeconds) {
 		return errors.New("poll interval must be 5, 10, 30, or 60 seconds")
+	}
+	if !validTerminalApp(settings.TerminalApp) {
+		return errors.New("terminal app is not supported")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

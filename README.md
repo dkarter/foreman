@@ -9,6 +9,8 @@ Foreman is a lightweight Raspberry Pi touchscreen interface that monitors live H
 
 The kiosk UI uses TypeScript and Preact, bundled into the Go binary with esbuild.
 
+Append `?preview=working`, `?preview=blocked`, `?preview=done`, or `?preview=idle` to the dashboard URL to render a synthetic agent in that state without an agent connection. Use `?preview=all` to render every state together. Preview mode is client-side only and does not change Foreman or Herdr state.
+
 ## Screenshots / Photos
 
 ![](https://github.com/user-attachments/assets/cab32f4a-5aac-451b-a851-28cb3dd72fce)
@@ -24,6 +26,8 @@ The kiosk UI uses TypeScript and Preact, bundled into the Go binary with esbuild
 - `mise run vnc-open` opens the Pi display through its local-only VNC server and an SSH tunnel.
 
 The menu-bar app and kiosk settings page share the resource polling interval. Five seconds is the default; 10, 30, and 60-second intervals are also available. Compact mode fits up to 15 agent tiles at 800×480.
+
+Clicking an agent focuses its Herdr pane and activates the terminal selected under **Focus Terminal** in the Foreman menu-bar menu. Ghostty is the default; detected iTerm2 and WezTerm installations are also available, and running terminals display their app icon. Select **Disabled** to focus the pane without activating an app.
 
 Installing a kiosk update closes an existing Foreman Chromium kiosk after replacing the files. Open the Foreman desktop launcher to start the updated version.
 

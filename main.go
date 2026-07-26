@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -418,6 +419,12 @@ func (a *app) applySettings(update settingsUpdate) error {
 	if update.CompactMode != nil {
 		next.CompactMode = *update.CompactMode
 	}
+	if update.TerminalApp != nil {
+		if !validTerminalApp(*update.TerminalApp) {
+			return fmt.Errorf("terminal app is not supported")
+		}
+		next.TerminalApp = *update.TerminalApp
+	}
 	if next == previous {
 		return nil
 	}
@@ -609,6 +616,23 @@ func (a *app) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 		focusCtx, focusCancel := context.WithTimeout(ctx, 2*time.Second)
 		err := a.herdr.request(focusCtx, "agent.focus", map[string]any{"target": message.PaneID}, nil)
 		focusCancel()
+		if err == nil {
+			a.mu.RLock()
+			terminalApp := a.state.Settings.TerminalApp
+			a.mu.RUnlock()
+			if terminalApp != "" {
+				go func() {
+					activationErr := exec.Command("/usr/bin/open", "-b", terminalApp).Run()
+					if activationErr == nil {
+						return
+					}
+					encoded, _ := json.Marshal(map[string]any{
+						"type": "terminalResult", "ok": false, "error": activationErr.Error(),
+					})
+					queueLatest(results, encoded)
+				}()
+			}
+		}
 		result := map[string]any{"type": "focusResult", "paneId": message.PaneID, "ok": err == nil}
 		if err != nil {
 			result["error"] = err.Error()
@@ -659,6 +683,7 @@ func (a *app) serveStatus(w http.ResponseWriter, r *http.Request) {
 	a.mu.RLock()
 	response := map[string]any{
 		"pollIntervalSeconds": a.state.Settings.PollIntervalSeconds,
+		"terminalApp":         a.state.Settings.TerminalApp,
 	}
 	if a.state.Connected {
 		response["agentStatus"] = aggregateAgentStatus(a.state.Agents)
