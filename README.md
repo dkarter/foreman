@@ -9,6 +9,14 @@ Foreman is a lightweight Raspberry Pi touchscreen interface that monitors live H
 
 The kiosk UI uses TypeScript and Preact, bundled into the Go binary with esbuild.
 
+## Screenshots / Photos
+
+![](https://github.com/user-attachments/assets/cab32f4a-5aac-451b-a851-28cb3dd72fce)
+
+![](https://github.com/user-attachments/assets/a40d5e87-2c8b-4e7a-945f-2179af14f00e)
+
+![](https://github.com/user-attachments/assets/95654da5-09a0-4f81-a845-e9206300646e)
+
 ## Install
 
 - `mise run install-host` installs the Go service and native macOS menu-bar controller.
