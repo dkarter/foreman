@@ -49,11 +49,9 @@ See [`docs/SECURITY.md`](docs/SECURITY.md) for the threat model, trust bootstrap
 
 ## Hardware
 
-- [Raspberry Pi 4 - 2GB RAM](https://www.amazon.com/dp/B09TTNPB4J/ref=cm_sw_r_as_gl_api_gl_i_VVAHCRJ0HEF76VSH88QV?linkCode=ml1&tag=doriankarterc-20&linkId=89a16e85276e8dbf2b227c9b89ba3ca9) (but any raspberry pi supported by the touch screen will do - it's just what I had on hand. The RPI4 is sitting at 32% RAM when idle (0.6GB used))
-- [Hosyond 7inch Touchscreen IPS Display](https://www.amazon.com/dp/B0D3QB7X4Z/ref=cm_sw_r_as_gl_api_gl_i_DYMKHVEE77W4MH40JM77?linkCode=ml1&tag=doriankarterc-20&linkId=f47dd615020db4162a97eb753aeb7683) (other touchscreens should work too - but this is the one I tried and it's relatively affordable and comes with all the hardware you need)
+- [Raspberry Pi 4 - 2GB RAM](https://www.amazon.com/dp/B09TTNPB4J/ref=cm_sw_r_as_gl_api_gl_i_VVAHCRJ0HEF76VSH88QV?linkCode=ml1&tag=doriankarterc-20&linkId=89a16e85276e8dbf2b227c9b89ba3ca9)[^affiliate] (but any raspberry pi supported by the touch screen will do - it's just what I had on hand. The RPI4 is sitting at 32% RAM when idle (0.6GB used))
+- [Hosyond 7inch Touchscreen IPS Display](https://www.amazon.com/dp/B0D3QB7X4Z/ref=cm_sw_r_as_gl_api_gl_i_DYMKHVEE77W4MH40JM77?linkCode=ml1&tag=doriankarterc-20&linkId=f47dd615020db4162a97eb753aeb7683)[^affiliate] (other touchscreens should work too - but this is the one I tried and it's relatively affordable and comes with all the hardware you need)
 - MacOS (for the host)
-
-[^affiliate]
 
 ## Trademark notice
 
