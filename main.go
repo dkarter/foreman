@@ -187,6 +187,19 @@ func statusRank(status string) int {
 	}
 }
 
+func aggregateAgentStatus(agents []agent) string {
+	status := "idle"
+	for _, item := range agents {
+		if item.Status == "blocked" {
+			return "blocked"
+		}
+		if item.Status == "working" {
+			status = "working"
+		}
+	}
+	return status
+}
+
 func (h herdrClient) subscribe(ctx context.Context, agents []agent) (<-chan struct{}, func(), error) {
 	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", h.socket)
 	if err != nil {
@@ -632,6 +645,27 @@ func (a *app) serveSettings(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (a *app) serveStatus(w http.ResponseWriter, r *http.Request) {
+	if !requestIsLoopback(r) {
+		http.Error(w, "status API is local-only", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	a.mu.RLock()
+	response := map[string]any{
+		"pollIntervalSeconds": a.state.Settings.PollIntervalSeconds,
+	}
+	if a.state.Connected {
+		response["agentStatus"] = aggregateAgentStatus(a.state.Agents)
+	}
+	a.mu.RUnlock()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(response)
+}
+
 func requestIsLoopback(r *http.Request) bool {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	return err == nil && net.ParseIP(host).IsLoopback()
@@ -923,6 +957,7 @@ func main() {
 	})
 	mux.HandleFunc("/ws", app.serveWebSocket)
 	mux.HandleFunc("/satellite", app.serveSatellite)
+	mux.HandleFunc("/api/status", app.serveStatus)
 	mux.HandleFunc("/api/settings", app.serveSettings)
 	mux.HandleFunc("/api/pairing/", app.servePairing)
 	mux.Handle("/", dashboardHandler)

@@ -4,9 +4,24 @@ import Foundation
 
 private let serviceLabel = "dev.herdr.foreman"
 private let dashboardURL = URL(string: "http://127.0.0.1:4040/")!
+private let statusURL = URL(string: "http://127.0.0.1:4040/api/status")!
 private let settingsURL = URL(string: "http://127.0.0.1:4040/api/settings")!
 private let pairingURL = URL(string: "http://127.0.0.1:4040/api/pairing/control")!
 private let pollIntervals = [5, 10, 30, 60]
+
+private enum AgentSummary: String {
+    case idle
+    case working
+    case blocked
+
+    var color: NSColor {
+        switch self {
+        case .idle: return NSColor(red: 72 / 255, green: 213 / 255, blue: 151 / 255, alpha: 1)
+        case .working: return NSColor(red: 1, green: 188 / 255, blue: 66 / 255, alpha: 1)
+        case .blocked: return NSColor(red: 1, green: 90 / 255, blue: 95 / 255, alpha: 1)
+        }
+    }
+}
 
 private func runLaunchctl(_ arguments: [String]) -> (Bool, String) {
     let process = Process()
@@ -36,11 +51,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pairingItem: NSMenuItem!
     private var pairedKiosksItem: NSMenuItem!
     private var unpairItem: NSMenuItem!
-    private var timer: Timer?
+    private var healthTimer: Timer?
+    private var blinkTimer: Timer?
     private var appearanceObservation: NSKeyValueObservation?
     private var lightStatusImage: NSImage?
     private var darkStatusImage: NSImage?
     private var interval = 5
+    private var agentSummary: AgentSummary?
+    private var indicatorVisible = true
     private var pendingPairingID: String?
     private var pendingPairingCode: String?
     private var pendingPairingName: String?
@@ -69,8 +87,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateStatusIcon() {
         guard let button = statusItem.button else { return }
         let darkMode = button.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        button.image = (darkMode ? darkStatusImage : lightStatusImage)
+        let baseImage = (darkMode ? darkStatusImage : lightStatusImage)
             ?? NSImage(systemSymbolName: "rectangle.on.rectangle", accessibilityDescription: "Foreman")
+        guard let baseImage, let agentSummary, indicatorVisible else {
+            button.image = baseImage
+            return
+        }
+
+        let image = NSImage(size: NSSize(width: 18, height: 18))
+        image.lockFocus()
+        baseImage.draw(in: NSRect(x: 0, y: 0, width: 18, height: 18))
+        let badge = NSBezierPath(ovalIn: NSRect(x: 0.5, y: 0.5, width: 5, height: 5))
+        (darkMode ? NSColor.black : NSColor.white).setStroke()
+        badge.lineWidth = 1
+        agentSummary.color.setFill()
+        badge.fill()
+        badge.stroke()
+        image.unlockFocus()
+        image.accessibilityDescription = "Foreman, agents \(agentSummary.rawValue)"
+        button.image = image
     }
 
     private func buildMenu() -> NSMenu {
@@ -122,22 +157,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func scheduleHealthPolling() {
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(timeInterval: 5, target: self, selector: #selector(checkHealth), userInfo: nil, repeats: true)
-        RunLoop.main.add(timer!, forMode: .common)
+        healthTimer?.invalidate()
+        healthTimer = Timer.scheduledTimer(timeInterval: 5, target: self, selector: #selector(checkHealth), userInfo: nil, repeats: true)
+        RunLoop.main.add(healthTimer!, forMode: .common)
         checkHealth()
     }
 
     @objc private func checkHealth() {
-        var request = URLRequest(url: settingsURL)
+        var request = URLRequest(url: statusURL)
         request.timeoutInterval = 2
         URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
             let healthy = (response as? HTTPURLResponse)?.statusCode == 200
-            let seconds = data.flatMap { data in
-                (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["pollIntervalSeconds"] as? Int
+            let state: [String: Any]? = data.flatMap {
+                try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
             }
+            let seconds = state?["pollIntervalSeconds"] as? Int
+            let summary = (state?["agentStatus"] as? String).flatMap(AgentSummary.init(rawValue:))
             DispatchQueue.main.async {
                 self?.setRunning(healthy)
+                self?.setAgentSummary(healthy ? summary : nil)
                 if let seconds {
                     self?.interval = seconds
                     self?.updatePollingChecks()
@@ -145,6 +183,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }.resume()
         checkPairing()
+    }
+
+    private func setAgentSummary(_ summary: AgentSummary?) {
+        guard agentSummary != summary else { return }
+        agentSummary = summary
+        indicatorVisible = true
+        blinkTimer?.invalidate()
+        blinkTimer = nil
+        if summary == .blocked {
+            blinkTimer = Timer.scheduledTimer(timeInterval: 0.55, target: self, selector: #selector(toggleStatusIndicator), userInfo: nil, repeats: true)
+            RunLoop.main.add(blinkTimer!, forMode: .common)
+        }
+        updateStatusIcon()
+    }
+
+    @objc private func toggleStatusIndicator() {
+        indicatorVisible.toggle()
+        updateStatusIcon()
     }
 
     private func checkPairing() {

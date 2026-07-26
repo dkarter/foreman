@@ -115,6 +115,48 @@ func TestStatusRankPrioritizesAttention(t *testing.T) {
 	}
 }
 
+func TestAggregateAgentStatus(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		agents []agent
+		want   string
+	}{
+		{name: "no agents", want: "idle"},
+		{name: "all idle", agents: []agent{{Status: "idle"}, {Status: "done"}}, want: "idle"},
+		{name: "working", agents: []agent{{Status: "idle"}, {Status: "working"}}, want: "working"},
+		{name: "blocked wins", agents: []agent{{Status: "working"}, {Status: "blocked"}}, want: "blocked"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := aggregateAgentStatus(test.agents); got != test.want {
+				t.Fatalf("aggregateAgentStatus() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestStatusOmitsStaleAgentsWhenDisconnected(t *testing.T) {
+	t.Parallel()
+
+	app := newApp(herdrClient{})
+	app.updateHerdr(dashboard{Connected: true, Agents: []agent{{Status: "blocked"}}})
+	app.setDisconnected()
+	request := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	request.RemoteAddr = "127.0.0.1:1234"
+	response := httptest.NewRecorder()
+	app.serveStatus(response, request)
+
+	var body map[string]any
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &body) != nil {
+		t.Fatalf("unexpected status response: %d %s", response.Code, response.Body.String())
+	}
+	if _, exists := body["agentStatus"]; exists {
+		t.Fatalf("disconnected status exposed stale agents: %#v", body)
+	}
+}
+
 func TestAgentSortPrioritizesAttentionThenRecency(t *testing.T) {
 	t.Parallel()
 
