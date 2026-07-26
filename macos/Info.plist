@@ -6,6 +6,8 @@
     <string>Foreman</string>
     <key>CFBundleIdentifier</key>
     <string>dev.herdr.foreman.status</string>
+    <key>CFBundleIconFile</key>
+    <string>Foreman.icns</string>
     <key>CFBundleName</key>
     <string>Foreman</string>
     <key>CFBundlePackageType</key>

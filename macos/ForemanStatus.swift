@@ -32,15 +32,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var stopItem: NSMenuItem!
     private var pollingItems: [NSMenuItem] = []
     private var timer: Timer?
+    private var appearanceObservation: NSKeyValueObservation?
+    private var lightStatusImage: NSImage?
+    private var darkStatusImage: NSImage?
     private var interval = 5
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "rectangle.on.rectangle", accessibilityDescription: "Foreman")
+        lightStatusImage = loadStatusImage(named: "foreman-menubar-for-light")
+        darkStatusImage = loadStatusImage(named: "foreman-menubar-for-dark")
+        appearanceObservation = statusItem.button?.observe(\.effectiveAppearance, options: [.initial, .new]) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.updateStatusIcon() }
+        }
         statusItem.button?.toolTip = "Foreman"
         statusItem.menu = buildMenu()
         scheduleHealthPolling()
+    }
+
+    private func loadStatusImage(named resource: String) -> NSImage? {
+        guard let imageURL = Bundle.main.url(forResource: resource, withExtension: "png"),
+              let image = NSImage(contentsOf: imageURL) else { return nil }
+        image.size = NSSize(width: 18, height: 18)
+        image.accessibilityDescription = "Foreman"
+        return image
+    }
+
+    private func updateStatusIcon() {
+        guard let button = statusItem.button else { return }
+        let darkMode = button.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        button.image = (darkMode ? darkStatusImage : lightStatusImage)
+            ?? NSImage(systemSymbolName: "rectangle.on.rectangle", accessibilityDescription: "Foreman")
     }
 
     private func buildMenu() -> NSMenu {
@@ -107,7 +129,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusLine.title = value ? "Foreman: Running" : "Foreman: Stopped"
         startItem.isEnabled = !value
         stopItem.isEnabled = value
-        statusItem.button?.contentTintColor = value ? .systemGreen : .secondaryLabelColor
         statusItem.button?.toolTip = statusLine.title
     }
 
