@@ -463,7 +463,8 @@ footer time {
 }
 
 .settings-heading button,
-.segmented-control button {
+.segmented-control button,
+.danger-button {
   min-height: 40px;
   padding: 0 16px;
   border: 1px solid #3d4547;
@@ -473,6 +474,72 @@ footer time {
   font-weight: 800;
   text-transform: uppercase;
   touch-action: manipulation;
+}
+
+.danger-button {
+  border-color: rgba(255, 90, 95, 0.55);
+  background: rgba(255, 90, 95, 0.08);
+  color: #ff8b8f;
+}
+
+.pairing-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 0;
+  border: 1px solid #34393b;
+  background:
+    linear-gradient(135deg, rgba(72, 213, 151, 0.07), transparent 45%),
+    rgba(13, 16, 18, 0.94);
+  text-align: center;
+}
+
+.pairing-eyebrow {
+  color: #48d597;
+  font-family: ui-monospace, "SFMono-Regular", monospace;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.pairing-panel h2 {
+  margin: 0;
+  font-size: 28px;
+}
+
+.pairing-panel p {
+  max-width: 460px;
+  margin: 0;
+  color: #8f989a;
+  font-size: 13px;
+}
+
+.pairing-panel button {
+  min-width: 170px;
+  min-height: 44px;
+  padding: 0 20px;
+  border: 1px solid #48d597;
+  border-radius: 2px;
+  background: rgba(72, 213, 151, 0.14);
+  color: #86edbd;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.pairing-code {
+  padding: 12px 20px;
+  border: 1px solid #556063;
+  background: #080a0b;
+  color: #ffbc42;
+  font-family: ui-monospace, "SFMono-Regular", monospace;
+  font-size: 40px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  line-height: 1;
 }
 
 .setting-row {

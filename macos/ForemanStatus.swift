@@ -5,6 +5,7 @@ import Foundation
 private let serviceLabel = "dev.herdr.foreman"
 private let dashboardURL = URL(string: "http://127.0.0.1:4040/")!
 private let settingsURL = URL(string: "http://127.0.0.1:4040/api/settings")!
+private let pairingURL = URL(string: "http://127.0.0.1:4040/api/pairing/control")!
 private let pollIntervals = [5, 10, 30, 60]
 
 private func runLaunchctl(_ arguments: [String]) -> (Bool, String) {
@@ -31,11 +32,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var startItem: NSMenuItem!
     private var stopItem: NSMenuItem!
     private var pollingItems: [NSMenuItem] = []
+    private var allowPairingItem: NSMenuItem!
+    private var pairingItem: NSMenuItem!
+    private var pairedKiosksItem: NSMenuItem!
+    private var unpairItem: NSMenuItem!
     private var timer: Timer?
     private var appearanceObservation: NSKeyValueObservation?
     private var lightStatusImage: NSImage?
     private var darkStatusImage: NSImage?
     private var interval = 5
+    private var pendingPairingID: String?
+    private var pendingPairingCode: String?
+    private var pendingPairingName: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -89,6 +97,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pollingRoot.submenu = pollingMenu
         menu.addItem(pollingRoot)
         menu.addItem(.separator())
+
+        allowPairingItem = item("Allow New Kiosk...", #selector(enablePairing))
+        pairingItem = item("Pairing: Checking...", #selector(reviewPairing))
+        pairingItem.isEnabled = false
+        unpairItem = item("Forget Paired Kiosks...", #selector(unpairAllKiosks))
+        unpairItem.isEnabled = false
+        pairedKiosksItem = NSMenuItem(title: "Paired Kiosks", action: nil, keyEquivalent: "")
+        pairedKiosksItem.submenu = NSMenu()
+        menu.addItem(allowPairingItem)
+        menu.addItem(pairingItem)
+        menu.addItem(pairedKiosksItem)
+        menu.addItem(unpairItem)
+        menu.addItem(.separator())
         menu.addItem(item("Quit Menu Bar", #selector(quitMenuBar)))
         menu.addItem(item("Quit Foreman", #selector(quitForeman)))
         return menu
@@ -122,6 +143,117 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self?.updatePollingChecks()
                 }
             }
+        }.resume()
+        checkPairing()
+    }
+
+    private func checkPairing() {
+        var request = URLRequest(url: pairingURL)
+        request.timeoutInterval = 2
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let data,
+                  let state = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return }
+            let pending = state["pending"] as? [String: Any]
+            let devices = state["devices"] as? [[String: Any]] ?? []
+            let pairingEnabled = state["pairingEnabled"] as? Bool == true
+            DispatchQueue.main.async {
+                self?.pendingPairingID = pending?["id"] as? String
+                self?.pendingPairingCode = pending?["code"] as? String
+                self?.pendingPairingName = pending?["name"] as? String
+                if let code = self?.pendingPairingCode {
+                    self?.pairingItem.title = "Approve Pairing · \(Self.formatCode(code))"
+                    self?.pairingItem.isEnabled = true
+                } else {
+                    self?.pairingItem.title = "No Pending Pairing Request"
+                    self?.pairingItem.isEnabled = false
+                }
+                self?.allowPairingItem.title = pairingEnabled ? "Pairing Enabled for 3 Minutes" : "Allow New Kiosk..."
+                self?.unpairItem.title = "Forget Paired Kiosks... (\(devices.count))"
+                self?.unpairItem.isEnabled = !devices.isEmpty
+                let kioskMenu = NSMenu()
+                for device in devices {
+                    guard let id = device["id"] as? String else { continue }
+                    let name = device["name"] as? String ?? "Foreman kiosk"
+                    let kioskItem = self?.item("Forget \(name)...", #selector(AppDelegate.unpairKiosk(_:)))
+                    kioskItem?.representedObject = id
+                    if let kioskItem { kioskMenu.addItem(kioskItem) }
+                }
+                self?.pairedKiosksItem.submenu = kioskMenu
+                self?.pairedKiosksItem.isEnabled = !devices.isEmpty
+            }
+        }.resume()
+    }
+
+    @objc private func enablePairing() {
+        var request = URLRequest(url: pairingURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["action": "enable"])
+        URLSession.shared.dataTask(with: request) { [weak self] _, _, _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self?.checkPairing() }
+        }.resume()
+    }
+
+    private static func formatCode(_ code: String) -> String {
+        guard code.count == 6 else { return code }
+        let midpoint = code.index(code.startIndex, offsetBy: 3)
+        return "\(code[..<midpoint]) \(code[midpoint...])"
+    }
+
+    @objc private func reviewPairing() {
+        guard let id = pendingPairingID, let code = pendingPairingCode else { return }
+        let alert = NSAlert()
+        alert.messageText = "Pair with \(pendingPairingName ?? "Foreman kiosk")?"
+        alert.informativeText = "Confirm this code is also displayed on the kiosk:\n\n\(Self.formatCode(code))"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Approve")
+        alert.addButton(withTitle: "Reject")
+        alert.addButton(withTitle: "Cancel")
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            sendPairingDecision(id: id, approve: true)
+        } else if response == .alertSecondButtonReturn {
+            sendPairingDecision(id: id, approve: false)
+        }
+    }
+
+    private func sendPairingDecision(id: String, approve: Bool) {
+        var request = URLRequest(url: pairingURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["id": id, "approve": approve])
+        URLSession.shared.dataTask(with: request) { [weak self] _, _, _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self?.checkPairing() }
+        }.resume()
+    }
+
+    @objc private func unpairAllKiosks() {
+        confirmUnpair(deviceID: nil, name: "all paired kiosks")
+    }
+
+    @objc private func unpairKiosk(_ sender: NSMenuItem) {
+        guard let deviceID = sender.representedObject as? String else { return }
+        confirmUnpair(deviceID: deviceID, name: sender.title.replacingOccurrences(of: "Forget ", with: "").replacingOccurrences(of: "...", with: ""))
+    }
+
+    private func confirmUnpair(deviceID: String?, name: String) {
+        let alert = NSAlert()
+        alert.messageText = "Forget \(name)?"
+        alert.informativeText = "Access will be revoked immediately. Pairing again will require a new code and approval on both devices."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Unpair")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        var components = URLComponents(url: pairingURL, resolvingAgainstBaseURL: false)!
+        if let deviceID {
+            components.queryItems = [URLQueryItem(name: "device", value: deviceID)]
+        }
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "DELETE"
+        URLSession.shared.dataTask(with: request) { [weak self] _, _, _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self?.checkPairing() }
         }.resume()
     }
 

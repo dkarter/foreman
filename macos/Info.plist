@@ -20,5 +20,11 @@
     <string>13.0</string>
     <key>LSUIElement</key>
     <true />
+    <key>NSBonjourServices</key>
+    <array>
+      <string>_foreman._tcp</string>
+    </array>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Foreman uses the local network to discover and pair with kiosk displays.</string>
   </dict>
 </plist>

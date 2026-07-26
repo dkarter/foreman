@@ -270,28 +270,36 @@ func (h herdrClient) subscribe(ctx context.Context, agents []agent) (<-chan stru
 }
 
 type app struct {
-	herdr herdrClient
+	herdr   herdrClient
+	pairing *pairingManager
 
 	mu                  sync.RWMutex
 	settingsMu          sync.Mutex
 	state               dashboard
 	encoded             []byte
-	clients             map[chan []byte]struct{}
-	satellites          map[chan []byte]struct{}
+	clients             map[chan []byte]pairedConnection
+	satellites          map[chan []byte]pairedConnection
 	settingsFile        string
 	settingsChanged     chan struct{}
 	satelliteGeneration uint64
 }
 
+type pairedConnection struct {
+	deviceID string
+	cancel   context.CancelFunc
+}
+
 func newApp(client herdrClient) *app {
 	initial := dashboard{Connected: false, Agents: []agent{}, Settings: defaultSettings()}
 	encoded, _ := json.Marshal(map[string]any{"type": "state", "state": initial})
+	pairing, _ := newPairingManager("")
 	return &app{
 		herdr:           client,
+		pairing:         pairing,
 		state:           initial,
 		encoded:         encoded,
-		clients:         make(map[chan []byte]struct{}),
-		satellites:      make(map[chan []byte]struct{}),
+		clients:         make(map[chan []byte]pairedConnection),
+		satellites:      make(map[chan []byte]pairedConnection),
 		settingsChanged: make(chan struct{}, 1),
 	}
 }
@@ -307,7 +315,7 @@ func (a *app) updateState(update func(*dashboard)) {
 	a.mu.Lock()
 	next := dashboard{
 		Connected: a.state.Connected,
-		Agents:    append([]agent(nil), a.state.Agents...),
+		Agents:    append(make([]agent, 0, len(a.state.Agents)), a.state.Agents...),
 		Metrics:   a.state.Metrics,
 		Settings:  a.state.Settings,
 	}
@@ -507,6 +515,10 @@ func sleep(ctx context.Context, duration time.Duration) bool {
 }
 
 func (a *app) serveWebSocket(w http.ResponseWriter, r *http.Request) {
+	if !requestIsLoopback(r) && !a.pairing.authorize(r, "/ws") {
+		http.Error(w, "kiosk pairing required", http.StatusUnauthorized)
+		return
+	}
 	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		log.Printf("WebSocket accept failed: %v", err)
@@ -517,8 +529,10 @@ func (a *app) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	updates := make(chan []byte, 1)
 	results := make(chan []byte, 4)
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
 	a.mu.Lock()
-	a.clients[updates] = struct{}{}
+	a.clients[updates] = pairedConnection{deviceID: r.URL.Query().Get("device"), cancel: cancel}
 	initialState, _ := json.Marshal(map[string]any{"type": "state", "state": a.state})
 	updates <- initialState
 	a.mu.Unlock()
@@ -528,8 +542,6 @@ func (a *app) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 		a.mu.Unlock()
 	}()
 
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
 	go func() {
 		for {
 			select {
@@ -630,6 +642,10 @@ func (a *app) broadcastSatelliteSettings(interval int) {
 }
 
 func (a *app) serveSatellite(w http.ResponseWriter, r *http.Request) {
+	if !a.pairing.authorize(r, "/satellite") {
+		http.Error(w, "kiosk pairing required", http.StatusUnauthorized)
+		return
+	}
 	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		return
@@ -642,7 +658,7 @@ func (a *app) serveSatellite(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	a.satelliteGeneration++
 	generation := a.satelliteGeneration
-	a.satellites[updates] = struct{}{}
+	a.satellites[updates] = pairedConnection{deviceID: r.URL.Query().Get("device"), cancel: cancel}
 	interval := a.state.Settings.PollIntervalSeconds
 	a.mu.Unlock()
 	defer func() {
@@ -693,6 +709,115 @@ func (a *app) serveSatellite(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (a *app) servePairing(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	switch {
+	case r.Method == http.MethodPost && r.URL.Path == "/api/pairing/request":
+		var request struct {
+			Name      string `json:"name"`
+			PublicKey string `json:"publicKey"`
+		}
+		if json.NewDecoder(r.Body).Decode(&request) != nil {
+			http.Error(w, "invalid pairing request", http.StatusBadRequest)
+			return
+		}
+		pending, serverKey, err := a.pairing.begin(request.Name, request.PublicKey, r.RemoteAddr)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": pending.ID, "code": pending.Code, "serverPublicKey": serverKey,
+			"expiresAt": pending.ExpiresAt,
+		})
+	case r.Method == http.MethodPost && r.URL.Path == "/api/pairing/confirm":
+		var request struct {
+			ID string `json:"id"`
+		}
+		if json.NewDecoder(r.Body).Decode(&request) != nil || a.pairing.confirm(request.ID) != nil {
+			http.Error(w, "pairing request is not available", http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/pairing/complete":
+		var request struct {
+			ID string `json:"id"`
+		}
+		if json.NewDecoder(r.Body).Decode(&request) != nil {
+			http.Error(w, "invalid pairing completion", http.StatusBadRequest)
+			return
+		}
+		a.pairing.complete(request.ID)
+		w.WriteHeader(http.StatusNoContent)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/pairing/status":
+		status, credential, err := a.pairing.status(r.URL.Query().Get("id"))
+		if err != nil {
+			http.Error(w, "could not complete pairing", http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": status, "credential": credential})
+	case r.Method == http.MethodGet && r.URL.Path == "/api/pairing/device":
+		_ = json.NewEncoder(w).Encode(map[string]any{"paired": a.pairing.hasDevice(r.URL.Query().Get("id"))})
+	case r.URL.Path == "/api/pairing/control":
+		if !requestIsLoopback(r) {
+			http.Error(w, "pairing control is local-only", http.StatusForbidden)
+			return
+		}
+		if r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(a.pairing.pendingState())
+			return
+		}
+		if r.Method == http.MethodDelete {
+			if err := a.pairing.unpair(r.URL.Query().Get("device")); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			a.disconnectPairedClients(r.URL.Query().Get("device"))
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method == http.MethodPost {
+			var request struct {
+				ID      string `json:"id"`
+				Approve bool   `json:"approve"`
+				Action  string `json:"action"`
+			}
+			if json.NewDecoder(r.Body).Decode(&request) != nil {
+				http.Error(w, "invalid pairing control request", http.StatusBadRequest)
+				return
+			}
+			if request.Action == "enable" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"enabledUntil": a.pairing.enable()})
+				return
+			}
+			if a.pairing.decide(request.ID, request.Approve) != nil {
+				http.Error(w, "pairing request is not available", http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (a *app) disconnectPairedClients(deviceID string) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, connection := range a.clients {
+		if deviceID == "" || connection.deviceID == deviceID {
+			connection.cancel()
+		}
+	}
+	for _, connection := range a.satellites {
+		if deviceID == "" || connection.deviceID == deviceID {
+			connection.cancel()
+		}
+	}
+}
+
 func (a *app) hasPane(paneID string) bool {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -732,9 +857,21 @@ func main() {
 	}
 
 	app := newApp(herdrClient{socket: socketPath()})
+	pairing, err := newPairingManager(pairingPath())
+	if err != nil {
+		log.Fatalf("Could not load pairing state: %v", err)
+	}
+	app.pairing = pairing
 	app.configureSettings(settingsPath())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	if !discoveryDisabled() {
+		shutdownDiscovery, discoveryErr := advertiseForeman(app.pairing, foremanPort(addr))
+		logDiscoveryError(discoveryErr)
+		if shutdownDiscovery != nil {
+			defer shutdownDiscovery()
+		}
+	}
 	go app.monitor(ctx)
 	go app.monitorMetrics(ctx)
 
@@ -750,6 +887,7 @@ func main() {
 	mux.HandleFunc("/ws", app.serveWebSocket)
 	mux.HandleFunc("/satellite", app.serveSatellite)
 	mux.HandleFunc("/api/settings", app.serveSettings)
+	mux.HandleFunc("/api/pairing/", app.servePairing)
 	fileServer := http.FileServerFS(assets)
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")

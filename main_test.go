@@ -2,12 +2,24 @@ package main
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/ecdh"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/grandcat/zeroconf"
 )
 
 func TestSnapshotBuildsDashboard(t *testing.T) {
@@ -173,5 +185,181 @@ func TestSettingsPersist(t *testing.T) {
 	}
 	if got := loadSettings(path); got.PollIntervalSeconds != 30 || !got.CompactMode {
 		t.Fatalf("unexpected persisted settings: %#v", got)
+	}
+}
+
+func TestPairingCeremonyAndAuthenticatedRequest(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "pairing.json")
+	manager, err := newPairingManager(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.enable()
+	clientKey, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, encodedServerKey, err := manager.begin(
+		"shop kiosk", rawBase64.EncodeToString(clientKey.PublicKey().Bytes()), "192.0.2.10:1234",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverKeyBytes, _ := rawBase64.DecodeString(encodedServerKey)
+	serverKey, err := ecdh.P256().NewPublicKey(serverKeyBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared, err := clientKey.ECDH(serverKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codeMAC := hmac.New(sha256.New, shared)
+	codeMAC.Write([]byte("foreman-pairing-code"))
+	codeMAC.Write(clientKey.PublicKey().Bytes())
+	codeMAC.Write(serverKeyBytes)
+	if pending.Code != fmt.Sprintf("%06d", binary.BigEndian.Uint32(codeMAC.Sum(nil)[:4])%1000000) {
+		t.Fatal("pairing codes do not match")
+	}
+	if err := manager.confirm(pending.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.decide(pending.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	status, encrypted, err := manager.status(pending.ID)
+	if err != nil || status != "paired" || encrypted == nil {
+		t.Fatalf("pairing status = %q, %#v, %v", status, encrypted, err)
+	}
+	key := sha256.Sum256(append(append(shared, clientKey.PublicKey().Bytes()...), serverKeyBytes...))
+	block, _ := aes.NewCipher(key[:])
+	aead, _ := cipher.NewGCM(block)
+	nonce, _ := rawBase64.DecodeString(encrypted.Nonce)
+	ciphertext, _ := rawBase64.DecodeString(encrypted.Ciphertext)
+	plaintext, err := aead.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var credential pairedDevice
+	if json.Unmarshal(plaintext, &credential) != nil || credential.Name != "shop kiosk" {
+		t.Fatalf("unexpected credential: %#v", credential)
+	}
+
+	timestamp := fmt.Sprint(time.Now().Unix())
+	nonceValue := "one-time-nonce"
+	secret, _ := rawBase64.DecodeString(credential.Secret)
+	signature := rawBase64.EncodeToString(authSignature(secret, http.MethodGet, "/ws", credential.ID, timestamp, nonceValue))
+	request := httptest.NewRequest(http.MethodGet, "/ws?device="+credential.ID+"&timestamp="+timestamp+"&nonce="+nonceValue+"&signature="+signature, nil)
+	if !manager.authorize(request, "/ws") {
+		t.Fatal("paired request was rejected")
+	}
+	if manager.authorize(request, "/ws") {
+		t.Fatal("replayed request was accepted")
+	}
+
+	reloaded, err := newPairingManager(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.devices) != 1 || reloaded.hostID != manager.hostID {
+		t.Fatalf("pairing store did not reload: %#v", reloaded)
+	}
+}
+
+func TestDiscoveryEntryUsesStableHostIdentity(t *testing.T) {
+	t.Parallel()
+	entry := &zeroconf.ServiceEntry{
+		ServiceRecord: zeroconf.ServiceRecord{Instance: "Foreman on studio", Service: foremanService, Domain: "local."},
+		HostName:      "studio.local.",
+		Port:          4040,
+		Text:          []string{"id=host-123", "name=Studio Mac", "protocol=1"},
+		AddrIPv4:      []net.IP{net.ParseIP("192.0.2.20")},
+	}
+	host, ok := discoveredHostFromEntry(entry)
+	if !ok || host.ID != "host-123" || host.dashboardURL() != "http://studio.local:4040" {
+		t.Fatalf("unexpected discovered host: %#v", host)
+	}
+}
+
+func TestAvahiDiscoveryParsesAndRemovesHost(t *testing.T) {
+	t.Parallel()
+	manager := &discoveryManager{hosts: make(map[string]discoveredHost)}
+	manager.applyAvahiLine(`=;wlan0;IPv4;Foreman\032on\032air\.local;_foreman._tcp;local;air.local;10.0.0.80;4040;"protocol=1" "name=MacBook\032Air" "id=host-123"`)
+	hosts := manager.list()
+	if len(hosts) != 1 || hosts[0].Name != "MacBook Air" || hosts[0].dashboardURL() != "http://air.local:4040" {
+		t.Fatalf("unexpected Avahi host: %#v", hosts)
+	}
+	manager.applyAvahiLine(`-;wlan0;IPv4;Foreman\032on\032air\.local;_foreman._tcp;local`)
+	if len(manager.list()) != 0 {
+		t.Fatalf("Avahi removal did not remove host: %#v", manager.hosts)
+	}
+}
+
+func TestPairingStoreRevokesOneKioskWithoutAffectingOthers(t *testing.T) {
+	t.Parallel()
+	manager, err := newPairingManager(filepath.Join(t.TempDir(), "pairing.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSecret, _ := randomValue(32)
+	secondSecret, _ := randomValue(32)
+	manager.devices["first"] = pairedDevice{ID: "first", Name: "Kitchen", Secret: firstSecret}
+	manager.devices["second"] = pairedDevice{ID: "second", Name: "Office", Secret: secondSecret}
+	if err := manager.saveLocked(); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.unpair("first"); err != nil {
+		t.Fatal(err)
+	}
+	if manager.hasDevice("first") || !manager.hasDevice("second") {
+		t.Fatalf("unexpected paired devices: %#v", manager.devices)
+	}
+	reloaded, err := newPairingManager(manager.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.hasDevice("first") || !reloaded.hasDevice("second") {
+		t.Fatalf("revocation was not persisted: %#v", reloaded.devices)
+	}
+}
+
+func TestLoopbackRequestsAreRecognized(t *testing.T) {
+	t.Parallel()
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4040/ws", nil)
+	request.RemoteAddr = "127.0.0.1:12345"
+	if !requestIsLoopback(request) {
+		t.Fatal("loopback request was not recognized")
+	}
+	request.RemoteAddr = "192.0.2.10:12345"
+	if requestIsLoopback(request) {
+		t.Fatal("remote request was recognized as loopback")
+	}
+}
+
+func TestPairingRetryReplacesRequestFromSameKiosk(t *testing.T) {
+	t.Parallel()
+	manager, err := newPairingManager(filepath.Join(t.TempDir(), "pairing.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.enable()
+	firstKey, _ := ecdh.P256().GenerateKey(rand.Reader)
+	first, _, err := manager.begin("Kitchen", rawBase64.EncodeToString(firstKey.PublicKey().Bytes()), "192.0.2.10:1000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondKey, _ := ecdh.P256().GenerateKey(rand.Reader)
+	second, _, err := manager.begin("Kitchen", rawBase64.EncodeToString(secondKey.PublicKey().Bytes()), "192.0.2.10:2000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == second.ID || manager.pending[first.ID] != nil || manager.pending[second.ID] == nil {
+		t.Fatalf("retry did not replace the original request: %#v", manager.pending)
+	}
+	otherKey, _ := ecdh.P256().GenerateKey(rand.Reader)
+	if _, _, err := manager.begin("Office", rawBase64.EncodeToString(otherKey.PublicKey().Bytes()), "192.0.2.11:1000"); err == nil {
+		t.Fatal("a different kiosk replaced the pending request")
 	}
 }

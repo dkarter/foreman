@@ -78,15 +78,18 @@ launchctl bootstrap "gui/$UID" "$HOME/Library/LaunchAgents/dev.herdr.foreman-sta
 [tasks.install-kiosk]
 description = "Installs the Foreman kiosk, desktop launcher, and Pi reporter"
 depends = ["build-satellite"]
-run = '''ssh foreman 'mkdir -p "$HOME/.config/autostart" "$HOME/.config/systemd/user" "$HOME/.local/bin" "$HOME/.local/share/icons/hicolor/512x512/apps" "$HOME/Desktop"'
-scp bin/foreman-linux-arm64 foreman:.local/bin/foreman.new
-scp deploy/foreman-satellite.service foreman:.config/systemd/user/foreman-satellite.service
-scp deploy/foreman-kiosk.desktop foreman:.config/autostart/foreman-kiosk.desktop
-scp deploy/foreman-kiosk.desktop foreman:Desktop/Foreman.desktop
-scp web/assets/herdr.png foreman:.local/share/icons/hicolor/512x512/apps/foreman.png
-ssh foreman 'systemctl --user stop foreman-satellite.service >/dev/null 2>&1 || true'
-ssh foreman 'mv "$HOME/.local/bin/foreman.new" "$HOME/.local/bin/foreman" && chmod +x "$HOME/.local/bin/foreman" "$HOME/Desktop/Foreman.desktop" && systemctl --user daemon-reload && systemctl --user enable --now foreman-satellite.service'
-ssh foreman 'gio set "$HOME/Desktop/Foreman.desktop" metadata::trusted true >/dev/null 2>&1 || true' '''
+run = '''target="${FOREMAN_SSH_TARGET:-foreman}"
+ssh "$target" 'command -v avahi-browse >/dev/null 2>&1 || (sudo -n apt-get update -qq && sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq avahi-utils)'
+ssh "$target" 'mkdir -p "$HOME/.config/autostart" "$HOME/.config/systemd/user" "$HOME/.local/bin" "$HOME/.local/share/icons/hicolor/512x512/apps" "$HOME/Desktop"'
+scp bin/foreman-linux-arm64 "$target":.local/bin/foreman.new
+scp deploy/foreman-satellite.service "$target":.config/systemd/user/foreman-satellite.service
+scp deploy/foreman-kiosk.desktop "$target":.config/autostart/foreman-kiosk.desktop
+scp deploy/foreman-kiosk.desktop "$target":Desktop/Foreman.desktop
+scp web/assets/herdr.png "$target":.local/share/icons/hicolor/512x512/apps/foreman.png
+ssh "$target" 'systemctl --user stop foreman-satellite.service >/dev/null 2>&1 || true'
+ssh "$target" 'mv "$HOME/.local/bin/foreman.new" "$HOME/.local/bin/foreman" && chmod +x "$HOME/.local/bin/foreman" "$HOME/Desktop/Foreman.desktop" && systemctl --user daemon-reload && systemctl --user enable --now foreman-satellite.service'
+ssh "$target" 'gio set "$HOME/Desktop/Foreman.desktop" metadata::trusted true >/dev/null 2>&1 || true'
+ssh "$target" 'pkill -f "[c]hromium.*--kiosk.*(127\\.0\\.0\\.1:4041|air\\.local:4040)" >/dev/null 2>&1 || true' '''
 
 [tasks.ssh]
 description = "Opens an SSH console on the Raspberry Pi"

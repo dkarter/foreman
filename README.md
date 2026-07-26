@@ -7,10 +7,28 @@ The kiosk UI uses TypeScript and Preact, bundled into the Go binary with esbuild
 ## Install
 
 - `mise run install-host` installs the Go service and native macOS menu-bar controller.
-- `mise run install-kiosk` installs the Chromium autostart entry, desktop launcher, and Raspberry Pi resource reporter.
+- `FOREMAN_SSH_TARGET=pi@raspberrypi.local mise run install-kiosk` installs the Chromium autostart entry, desktop launcher, and Raspberry Pi resource reporter. The target defaults to the `foreman` SSH alias.
 - `mise run vnc-open` opens the Pi display through its local-only VNC server and an SSH tunnel.
 
 The menu-bar app and kiosk settings page share the resource polling interval. Five seconds is the default; 10, 30, and 60-second intervals are also available. Compact mode fits up to 15 agent tiles at 800×480.
+
+Installing a kiosk update closes an existing Foreman Chromium kiosk after replacing the files. Open the Foreman desktop launcher to start the updated version.
+
+## Discovery and pairing
+
+Foreman Macs advertise `_foreman._tcp.local` with Bonjour. The kiosk opens its local discovery page, lists every compatible Mac on the LAN, and uses each Mac's stable installation ID so DHCP address changes do not break the relationship.
+
+To pair a kiosk:
+
+1. Choose **Allow New Kiosk** from the Foreman menu on the Mac. Pairing remains open for three minutes.
+2. Select that Mac on the kiosk and choose **Start pairing**.
+3. Verify that both devices show the same six-digit code, then approve it on each device.
+
+Each Mac can authorize multiple kiosks. A kiosk keeps a separate credential for every Mac, so **Settings → Switch Mac** reconnects to a previously paired computer without another code. The Mac menu can revoke one kiosk or all paired kiosks.
+
+Pairing uses ephemeral P-256 ECDH and displays a short authentication string to detect a person-in-the-middle. The resulting 256-bit device secret is encrypted during pairing and stored in files readable only by the current user. Dashboard and satellite WebSocket upgrades require a fresh HMAC signature, timestamp, and one-time nonce; revoked and replayed credentials are rejected.
+
+The current LAN transport is `http://` and `ws://`. Authentication prevents unauthorized control, but message contents are not confidential from passive network observers. TLS is still required when confidentiality is part of the threat model.
 
 ## Package build approval
 
