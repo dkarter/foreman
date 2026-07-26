@@ -55,4 +55,10 @@ See [`docs/SECURITY.md`](docs/SECURITY.md) for the threat model, trust bootstrap
 
 [^affiliate]
 
+## Trademark notice
+
+All agent names, logos, and trademarks, including the Herdr name and logo, are
+the property of their respective owners. Foreman is an independent project and
+is not affiliated with, sponsored by, or endorsed by those owners.
+
 [^affiliate]: The Amazon links above are affiliate links. I may earn a small commission from qualifying purchases at no additional cost to you.
