@@ -1,5 +1,6 @@
 <p align="center">
   <img src="./assets/foreman-app-icon.png" alt="Project logo" width="200" />
+  <br />
   <strong>Foreman</strong><br />
   Live Herdr agent monitoring dashboard hardware
 </p>
