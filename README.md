@@ -1,9 +1,7 @@
 <p align="center">
   <img src="./assets/foreman-app-icon.png" alt="Project logo" width="200" />
-
-<strong>Foreman</strong><br />
-Live Herdr agent monitoring dashboard hardware
-
+  <strong>Foreman</strong><br />
+  Live Herdr agent monitoring dashboard hardware
 </p>
 
 Foreman is a lightweight Raspberry Pi touchscreen interface that monitors live Herdr agents and focuses their panes with a tap.
