@@ -195,6 +195,8 @@ func aggregateAgentStatus(agents []agent) string {
 		}
 		if item.Status == "working" {
 			status = "working"
+		} else if item.Status == "done" && status == "idle" {
+			status = "done"
 		}
 	}
 	return status

@@ -11,12 +11,14 @@ private let pollIntervals = [5, 10, 30, 60]
 
 private enum AgentSummary: String {
     case idle
+    case done
     case working
     case blocked
 
     var color: NSColor {
         switch self {
         case .idle: return NSColor(red: 72 / 255, green: 213 / 255, blue: 151 / 255, alpha: 1)
+        case .done: return NSColor(red: 89 / 255, green: 185 / 255, blue: 243 / 255, alpha: 1)
         case .working: return NSColor(red: 1, green: 188 / 255, blue: 66 / 255, alpha: 1)
         case .blocked: return NSColor(red: 1, green: 90 / 255, blue: 95 / 255, alpha: 1)
         }

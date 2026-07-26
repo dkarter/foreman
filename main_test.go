@@ -124,8 +124,10 @@ func TestAggregateAgentStatus(t *testing.T) {
 		want   string
 	}{
 		{name: "no agents", want: "idle"},
-		{name: "all idle", agents: []agent{{Status: "idle"}, {Status: "done"}}, want: "idle"},
+		{name: "all idle", agents: []agent{{Status: "idle"}, {Status: "idle"}}, want: "idle"},
+		{name: "done", agents: []agent{{Status: "idle"}, {Status: "done"}}, want: "done"},
 		{name: "working", agents: []agent{{Status: "idle"}, {Status: "working"}}, want: "working"},
+		{name: "working wins over done", agents: []agent{{Status: "done"}, {Status: "working"}}, want: "working"},
 		{name: "blocked wins", agents: []agent{{Status: "working"}, {Status: "blocked"}}, want: "blocked"},
 	}
 	for _, test := range tests {
