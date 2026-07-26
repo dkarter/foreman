@@ -3,5 +3,6 @@ Type=Application
 Name=Foreman
 Comment=Herdr agent control surface
 Exec=chromium --ozone-platform=wayland --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --disable-translate --overscroll-history-navigation=0 http://air.local:4040
+Icon=foreman
 Terminal=false
 X-GNOME-Autostart-enabled=true

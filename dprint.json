@@ -28,6 +28,8 @@
   },
   "excludes": [
     "**/node_modules",
+    "web/app.js",
+    "aube-lock.yaml",
     "**/*-lock.json",
     "_build/**",
     "deps/**",

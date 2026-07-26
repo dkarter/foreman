@@ -1,4 +1,5 @@
 [tools]
+"aube" = "1.29.1"
 "github:crate-ci/committed" = "latest"
 dprint = "latest"
 fnox = "latest"
@@ -6,10 +7,11 @@ gitleaks = "latest"
 go = "1.25.12"
 lefthook = "latest"
 pitchfork = "latest"
+node = "24.18.0"
 "github:dmno-dev/varlock" = "1.13.0"
 
 [hooks]
-postinstall = "lefthook install"
+postinstall = "aube install && lefthook install"
 
 [tasks.fmt]
 description = "Formats all supported files"
@@ -21,11 +23,24 @@ run = "dprint check"
 
 [tasks.test]
 description = "Runs the test suite"
-run = "go test ./..."
+run = "go test ./... && aube run check"
+
+[tasks.build-web]
+description = "Type-checks and bundles the Preact kiosk UI"
+run = "aube run check && aube run build"
 
 [tasks.build]
 description = "Builds the lightweight Foreman server"
+depends = ["build-web"]
 run = "mkdir -p bin && go build -trimpath -ldflags='-s -w' -o bin/foreman ."
+
+[tasks.build-status]
+description = "Builds the native macOS Foreman menu bar app"
+run = "mkdir -p bin && swiftc -O -parse-as-library -target arm64-apple-macos13.0 -framework AppKit -framework Foundation macos/ForemanStatus.swift -o bin/foreman-status"
+
+[tasks.build-satellite]
+description = "Builds the Raspberry Pi resource reporter"
+run = "mkdir -p bin && GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o bin/foreman-linux-arm64 ."
 
 [tasks.serve]
 description = "Runs Foreman on the host"
@@ -33,15 +48,31 @@ run = "go run ."
 
 [tasks.install-host]
 description = "Builds and installs Foreman as a macOS user service"
-depends = ["build"]
-run = '''cp deploy/dev.herdr.foreman.plist "$HOME/Library/LaunchAgents/dev.herdr.foreman.plist"
+depends = ["build", "build-status"]
+run = '''mkdir -p "$HOME/Applications/Foreman.app/Contents/MacOS" "$HOME/Applications/Foreman.app/Contents/Resources"
+cp bin/foreman-status "$HOME/Applications/Foreman.app/Contents/MacOS/Foreman"
+cp bin/foreman "$HOME/Applications/Foreman.app/Contents/Resources/foreman-server"
+cp macos/Info.plist "$HOME/Applications/Foreman.app/Contents/Info.plist"
+cp web/assets/herdr.png "$HOME/Applications/Foreman.app/Contents/Resources/herdr.png"
+sed "s|__HOME__|$HOME|g" deploy/dev.herdr.foreman.plist > "$HOME/Library/LaunchAgents/dev.herdr.foreman.plist"
+sed "s|__HOME__|$HOME|g" deploy/dev.herdr.foreman-status.plist > "$HOME/Library/LaunchAgents/dev.herdr.foreman-status.plist"
 launchctl bootout "gui/$UID/dev.herdr.foreman" >/dev/null 2>&1 || true
-launchctl bootstrap "gui/$UID" "$HOME/Library/LaunchAgents/dev.herdr.foreman.plist"'''
+launchctl bootout "gui/$UID/dev.herdr.foreman-status" >/dev/null 2>&1 || true
+launchctl bootstrap "gui/$UID" "$HOME/Library/LaunchAgents/dev.herdr.foreman.plist"
+launchctl bootstrap "gui/$UID" "$HOME/Library/LaunchAgents/dev.herdr.foreman-status.plist"'''
 
 [tasks.install-kiosk]
-description = "Installs the Foreman Chromium kiosk on the Raspberry Pi"
-run = '''ssh foreman 'mkdir -p "$HOME/.config/autostart"'
-scp deploy/foreman-kiosk.desktop foreman:.config/autostart/foreman-kiosk.desktop'''
+description = "Installs the Foreman kiosk, desktop launcher, and Pi reporter"
+depends = ["build-satellite"]
+run = '''ssh foreman 'mkdir -p "$HOME/.config/autostart" "$HOME/.config/systemd/user" "$HOME/.local/bin" "$HOME/.local/share/icons/hicolor/512x512/apps" "$HOME/Desktop"'
+scp bin/foreman-linux-arm64 foreman:.local/bin/foreman.new
+scp deploy/foreman-satellite.service foreman:.config/systemd/user/foreman-satellite.service
+scp deploy/foreman-kiosk.desktop foreman:.config/autostart/foreman-kiosk.desktop
+scp deploy/foreman-kiosk.desktop foreman:Desktop/Foreman.desktop
+scp web/assets/herdr.png foreman:.local/share/icons/hicolor/512x512/apps/foreman.png
+ssh foreman 'systemctl --user stop foreman-satellite.service >/dev/null 2>&1 || true'
+ssh foreman 'mv "$HOME/.local/bin/foreman.new" "$HOME/.local/bin/foreman" && chmod +x "$HOME/.local/bin/foreman" "$HOME/Desktop/Foreman.desktop" && systemctl --user daemon-reload && systemctl --user enable --now foreman-satellite.service'
+ssh foreman 'gio set "$HOME/Desktop/Foreman.desktop" metadata::trusted true >/dev/null 2>&1 || true' '''
 
 [tasks.ssh]
 description = "Opens an SSH console on the Raspberry Pi"

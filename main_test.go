@@ -100,6 +100,20 @@ func TestStatusRankPrioritizesAttention(t *testing.T) {
 	}
 }
 
+func TestAgentSortPrioritizesAttentionThenRecency(t *testing.T) {
+	t.Parallel()
+
+	agents := []agent{
+		{PaneID: "old", Status: "idle", StateChangeSeq: 2},
+		{PaneID: "new", Status: "working", StateChangeSeq: 8},
+		{PaneID: "blocked", Status: "blocked", StateChangeSeq: 1},
+	}
+	sortAgents(agents)
+	if agents[0].PaneID != "blocked" || agents[1].PaneID != "new" || agents[2].PaneID != "old" {
+		t.Fatalf("unexpected agent order: %#v", agents)
+	}
+}
+
 func TestMetricParsing(t *testing.T) {
 	t.Parallel()
 
@@ -109,12 +123,16 @@ func TestMetricParsing(t *testing.T) {
 	if got, ok := parseMemoryPressure("System-wide memory free percentage: 62%\n"); !ok || got != 38 {
 		t.Fatalf("parseMemoryPressure() = %v, want 38", got)
 	}
-	cpu, ram, ok := parseProcessMetrics(" 0.3 18432\n")
-	if !ok || cpu != 0.3 || ram != 18 {
-		t.Fatalf("parseProcessMetrics() = %v, %v, want 0.3, 18", cpu, ram)
-	}
 	if _, ok := parseMemoryPressure("unexpected output"); ok {
 		t.Fatal("invalid memory pressure should not produce a metric")
+	}
+	idle, total, ok := parseProcStat("cpu  10 2 3 20 5 0 0 0\n")
+	if !ok || idle != 25 || total != 40 {
+		t.Fatalf("parseProcStat() = %v, %v, want 25, 40", idle, total)
+	}
+	used, total, ok := parseProcMeminfo("MemTotal: 1000 kB\nMemAvailable: 400 kB\n")
+	if !ok || used != 600*1024 || total != 1000*1024 {
+		t.Fatalf("parseProcMeminfo() = %v, %v", used, total)
 	}
 }
 
@@ -122,11 +140,11 @@ func TestStateUpdatesPreserveIndependentData(t *testing.T) {
 	t.Parallel()
 
 	app := newApp(herdrClient{})
-	metrics := resourceMetrics{
-		HostCPU: metricValue(12), HostRAM: metricValue(34),
-		ForemanCPU: metricValue(0.2), ForemanRAMMiB: metricValue(18),
-	}
-	app.updateMetrics(metrics)
+	host := systemMetrics{CPU: floatValue(12), RAM: floatValue(34)}
+	foreman := systemMetrics{CPU: floatValue(0.2), RAM: floatValue(18)}
+	app.updateHostMetrics(host)
+	app.updateForemanMetrics(foreman, true)
+	metrics := resourceMetrics{Host: host, Foreman: foreman, ForemanConnected: true}
 	app.updateHerdr(dashboard{Connected: true, Agents: []agent{{PaneID: "w1:p1"}}})
 
 	if !reflect.DeepEqual(app.state.Metrics, metrics) {
@@ -136,9 +154,24 @@ func TestStateUpdatesPreserveIndependentData(t *testing.T) {
 		t.Fatalf("unexpected Herdr state: %#v", app.state)
 	}
 
-	nextMetrics := resourceMetrics{HostCPU: metricValue(56), HostRAM: metricValue(78)}
-	app.updateMetrics(nextMetrics)
+	app.updateHostMetrics(systemMetrics{CPU: floatValue(56), RAM: floatValue(78)})
 	if !app.state.Connected || len(app.state.Agents) != 1 {
 		t.Fatalf("metrics update replaced Herdr state: %#v", app.state)
+	}
+}
+
+func TestSettingsPersist(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "settings.json")
+	app := newApp(herdrClient{})
+	app.settingsFile = path
+	poll := 30
+	compact := true
+	if err := app.applySettings(settingsUpdate{PollIntervalSeconds: &poll, CompactMode: &compact}); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadSettings(path); got.PollIntervalSeconds != 30 || !got.CompactMode {
+		t.Fatalf("unexpected persisted settings: %#v", got)
 	}
 }

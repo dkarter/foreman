@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
+    "lib": ["DOM", "ES2022"],
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["frontend/**/*.tsx"]
+}

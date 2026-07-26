@@ -27,20 +27,22 @@ import (
 var webAssets embed.FS
 
 type agent struct {
-	PaneID      string `json:"paneId"`
-	WorkspaceID string `json:"workspaceId"`
-	Workspace   string `json:"workspace"`
-	Kind        string `json:"kind"`
-	Status      string `json:"status"`
-	Title       string `json:"title"`
-	CWD         string `json:"cwd"`
-	Focused     bool   `json:"focused"`
+	PaneID         string `json:"paneId"`
+	WorkspaceID    string `json:"workspaceId"`
+	Workspace      string `json:"workspace"`
+	Kind           string `json:"kind"`
+	Status         string `json:"status"`
+	Title          string `json:"title"`
+	CWD            string `json:"cwd"`
+	Focused        bool   `json:"focused"`
+	StateChangeSeq uint64 `json:"-"`
 }
 
 type dashboard struct {
 	Connected bool            `json:"connected"`
 	Agents    []agent         `json:"agents"`
 	Metrics   resourceMetrics `json:"metrics"`
+	Settings  appSettings     `json:"settings"`
 }
 
 type snapshot struct {
@@ -50,13 +52,14 @@ type snapshot struct {
 }
 
 type snapshotAgent struct {
-	Agent         string `json:"agent"`
-	AgentStatus   string `json:"agent_status"`
-	CWD           string `json:"cwd"`
-	Focused       bool   `json:"focused"`
-	PaneID        string `json:"pane_id"`
-	TerminalTitle string `json:"terminal_title_stripped"`
-	WorkspaceID   string `json:"workspace_id"`
+	Agent          string `json:"agent"`
+	AgentStatus    string `json:"agent_status"`
+	CWD            string `json:"cwd"`
+	Focused        bool   `json:"focused"`
+	PaneID         string `json:"pane_id"`
+	TerminalTitle  string `json:"terminal_title_stripped"`
+	WorkspaceID    string `json:"workspace_id"`
+	StateChangeSeq uint64 `json:"state_change_seq"`
 }
 
 type workspace struct {
@@ -137,24 +140,35 @@ func (h herdrClient) snapshot(ctx context.Context) (dashboard, error) {
 			title = filepath.Base(item.CWD)
 		}
 		agents = append(agents, agent{
-			PaneID:      item.PaneID,
-			WorkspaceID: item.WorkspaceID,
-			Workspace:   workspaceLabels[item.WorkspaceID],
-			Kind:        item.Agent,
-			Status:      item.AgentStatus,
-			Title:       title,
-			CWD:         item.CWD,
-			Focused:     item.PaneID == result.Snapshot.FocusedPaneID || item.Focused,
+			PaneID:         item.PaneID,
+			WorkspaceID:    item.WorkspaceID,
+			Workspace:      workspaceLabels[item.WorkspaceID],
+			Kind:           item.Agent,
+			Status:         item.AgentStatus,
+			Title:          title,
+			CWD:            item.CWD,
+			Focused:        item.PaneID == result.Snapshot.FocusedPaneID || item.Focused,
+			StateChangeSeq: item.StateChangeSeq,
 		})
 	}
-	sort.Slice(agents, func(i, j int) bool {
-		if agents[i].Status == agents[j].Status {
-			return agents[i].Workspace < agents[j].Workspace
-		}
-		return statusRank(agents[i].Status) < statusRank(agents[j].Status)
-	})
+	sortAgents(agents)
 
 	return dashboard{Connected: true, Agents: agents}, nil
+}
+
+func sortAgents(agents []agent) {
+	sort.SliceStable(agents, func(i, j int) bool {
+		if (agents[i].Status == "blocked") != (agents[j].Status == "blocked") {
+			return agents[i].Status == "blocked"
+		}
+		if agents[i].StateChangeSeq != agents[j].StateChangeSeq {
+			return agents[i].StateChangeSeq > agents[j].StateChangeSeq
+		}
+		if agents[i].Status != agents[j].Status {
+			return statusRank(agents[i].Status) < statusRank(agents[j].Status)
+		}
+		return agents[i].Workspace < agents[j].Workspace
+	})
 }
 
 func statusRank(status string) int {
@@ -258,21 +272,35 @@ func (h herdrClient) subscribe(ctx context.Context, agents []agent) (<-chan stru
 type app struct {
 	herdr herdrClient
 
-	mu      sync.RWMutex
-	state   dashboard
-	encoded []byte
-	clients map[chan []byte]struct{}
+	mu                  sync.RWMutex
+	settingsMu          sync.Mutex
+	state               dashboard
+	encoded             []byte
+	clients             map[chan []byte]struct{}
+	satellites          map[chan []byte]struct{}
+	settingsFile        string
+	settingsChanged     chan struct{}
+	satelliteGeneration uint64
 }
 
 func newApp(client herdrClient) *app {
-	initial := dashboard{Connected: false, Agents: []agent{}}
+	initial := dashboard{Connected: false, Agents: []agent{}, Settings: defaultSettings()}
 	encoded, _ := json.Marshal(map[string]any{"type": "state", "state": initial})
 	return &app{
-		herdr:   client,
-		state:   initial,
-		encoded: encoded,
-		clients: make(map[chan []byte]struct{}),
+		herdr:           client,
+		state:           initial,
+		encoded:         encoded,
+		clients:         make(map[chan []byte]struct{}),
+		satellites:      make(map[chan []byte]struct{}),
+		settingsChanged: make(chan struct{}, 1),
 	}
+}
+
+func (a *app) configureSettings(path string) {
+	a.settingsFile = path
+	a.updateState(func(state *dashboard) {
+		state.Settings = loadSettings(path)
+	})
 }
 
 func (a *app) updateState(update func(*dashboard)) {
@@ -281,6 +309,7 @@ func (a *app) updateState(update func(*dashboard)) {
 		Connected: a.state.Connected,
 		Agents:    append([]agent(nil), a.state.Agents...),
 		Metrics:   a.state.Metrics,
+		Settings:  a.state.Settings,
 	}
 	update(&next)
 	encoded, err := json.Marshal(map[string]any{"type": "state", "state": next})
@@ -295,18 +324,7 @@ func (a *app) updateState(update func(*dashboard)) {
 	a.state = next
 	a.encoded = encoded
 	for client := range a.clients {
-		select {
-		case client <- encoded:
-		default:
-			select {
-			case <-client:
-			default:
-			}
-			select {
-			case client <- encoded:
-			default:
-			}
-		}
+		queueLatest(client, encoded)
 	}
 	a.mu.Unlock()
 }
@@ -324,10 +342,90 @@ func (a *app) updateHerdr(next dashboard) {
 	})
 }
 
-func (a *app) updateMetrics(metrics resourceMetrics) {
-	a.updateState(func(state *dashboard) {
-		state.Metrics = metrics
+func (a *app) updateHostMetrics(metrics systemMetrics) {
+	a.updateResourceMetrics(func(resource *resourceMetrics) {
+		resource.Host = metrics
 	})
+}
+
+func (a *app) updateForemanMetrics(metrics systemMetrics, connected bool) {
+	a.updateResourceMetrics(func(resource *resourceMetrics) {
+		resource.Foreman = metrics
+		resource.ForemanConnected = connected
+	})
+}
+
+func (a *app) updateResourceMetrics(update func(*resourceMetrics)) {
+	a.mu.Lock()
+	metrics := a.state.Metrics
+	update(&metrics)
+	a.state.Metrics = metrics
+	encoded, err := json.Marshal(map[string]any{"type": "metrics", "metrics": metrics})
+	if err == nil {
+		for client := range a.clients {
+			select {
+			case client <- encoded:
+			default:
+			}
+		}
+	}
+	a.mu.Unlock()
+}
+
+func (a *app) pollInterval() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.state.Settings.PollIntervalSeconds
+}
+
+func (a *app) applySettings(update settingsUpdate) error {
+	a.settingsMu.Lock()
+	defer a.settingsMu.Unlock()
+	a.mu.RLock()
+	next := a.state.Settings
+	a.mu.RUnlock()
+	previous := next
+	if update.PollIntervalSeconds != nil {
+		if !validPollInterval(*update.PollIntervalSeconds) {
+			return fmt.Errorf("poll interval must be 5, 10, 30, or 60 seconds")
+		}
+		next.PollIntervalSeconds = *update.PollIntervalSeconds
+	}
+	if update.CompactMode != nil {
+		next.CompactMode = *update.CompactMode
+	}
+	if next == previous {
+		return nil
+	}
+	if a.settingsFile != "" {
+		if err := saveSettings(a.settingsFile, next); err != nil {
+			return err
+		}
+	}
+	a.updateState(func(state *dashboard) {
+		state.Settings = next
+	})
+	if next.PollIntervalSeconds != previous.PollIntervalSeconds {
+		queueLatest(a.settingsChanged, struct{}{})
+		a.broadcastSatelliteSettings(next.PollIntervalSeconds)
+	}
+	return nil
+}
+
+func queueLatest[T any](channel chan T, value T) {
+	select {
+	case channel <- value:
+		return
+	default:
+	}
+	select {
+	case <-channel:
+	default:
+	}
+	select {
+	case channel <- value:
+	default:
+	}
 }
 
 func (a *app) monitor(ctx context.Context) {
@@ -418,9 +516,11 @@ func (a *app) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn.SetReadLimit(1024)
 
 	updates := make(chan []byte, 1)
+	results := make(chan []byte, 4)
 	a.mu.Lock()
 	a.clients[updates] = struct{}{}
-	updates <- append([]byte(nil), a.encoded...)
+	initialState, _ := json.Marshal(map[string]any{"type": "state", "state": a.state})
+	updates <- initialState
 	a.mu.Unlock()
 	defer func() {
 		a.mu.Lock()
@@ -443,17 +543,32 @@ func (a *app) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 					cancel()
 					return
 				}
+			case message := <-results:
+				writeCtx, writeCancel := context.WithTimeout(ctx, 3*time.Second)
+				err := conn.Write(writeCtx, websocket.MessageText, message)
+				writeCancel()
+				if err != nil {
+					cancel()
+					return
+				}
 			}
 		}
 	}()
-
 	for {
 		var message struct {
-			Type   string `json:"type"`
-			PaneID string `json:"paneId"`
+			Type     string         `json:"type"`
+			PaneID   string         `json:"paneId"`
+			Settings settingsUpdate `json:"settings"`
 		}
 		if err := wsjson.Read(ctx, conn, &message); err != nil {
 			return
+		}
+		if message.Type == "settings" {
+			if err := a.applySettings(message.Settings); err != nil {
+				encoded, _ := json.Marshal(map[string]any{"type": "settingsResult", "ok": false, "error": err.Error()})
+				queueLatest(results, encoded)
+			}
+			continue
 		}
 		if message.Type != "focus" || !a.hasPane(message.PaneID) {
 			continue
@@ -467,9 +582,113 @@ func (a *app) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 			result["error"] = err.Error()
 		}
 		encoded, _ := json.Marshal(result)
-		select {
-		case updates <- encoded:
-		default:
+		queueLatest(results, encoded)
+	}
+}
+
+func (a *app) serveSettings(w http.ResponseWriter, r *http.Request) {
+	if !requestIsLoopback(r) {
+		http.Error(w, "settings API is local-only", http.StatusForbidden)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method == http.MethodGet {
+		a.mu.RLock()
+		settings := a.state.Settings
+		a.mu.RUnlock()
+		_ = json.NewEncoder(w).Encode(settings)
+		return
+	}
+	if r.Method != http.MethodPut {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var update settingsUpdate
+	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+		http.Error(w, "invalid settings", http.StatusBadRequest)
+		return
+	}
+	if err := a.applySettings(update); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func requestIsLoopback(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	return err == nil && net.ParseIP(host).IsLoopback()
+}
+
+func (a *app) broadcastSatelliteSettings(interval int) {
+	message, _ := json.Marshal(map[string]any{"type": "settings", "pollIntervalSeconds": interval})
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for satellite := range a.satellites {
+		queueLatest(satellite, message)
+	}
+}
+
+func (a *app) serveSatellite(w http.ResponseWriter, r *http.Request) {
+	conn, err := websocket.Accept(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.CloseNow()
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	updates := make(chan []byte, 1)
+	a.mu.Lock()
+	a.satelliteGeneration++
+	generation := a.satelliteGeneration
+	a.satellites[updates] = struct{}{}
+	interval := a.state.Settings.PollIntervalSeconds
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		delete(a.satellites, updates)
+		isCurrent := generation == a.satelliteGeneration
+		a.mu.Unlock()
+		if isCurrent {
+			a.updateForemanMetrics(systemMetrics{}, false)
+		}
+	}()
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case message := <-updates:
+				writeCtx, writeCancel := context.WithTimeout(ctx, 3*time.Second)
+				err := conn.Write(writeCtx, websocket.MessageText, message)
+				writeCancel()
+				if err != nil {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	initial, _ := json.Marshal(map[string]any{"type": "settings", "pollIntervalSeconds": interval})
+	queueLatest(updates, initial)
+
+	for {
+		var message struct {
+			Type    string        `json:"type"`
+			Metrics systemMetrics `json:"metrics"`
+		}
+		if err := wsjson.Read(ctx, conn, &message); err != nil {
+			return
+		}
+		if message.Type == "metrics" {
+			a.mu.RLock()
+			isCurrent := generation == a.satelliteGeneration
+			a.mu.RUnlock()
+			if isCurrent {
+				a.updateForemanMetrics(message.Metrics, true)
+			}
 		}
 	}
 }
@@ -497,6 +716,13 @@ func socketPath() string {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "satellite" {
+		log.Printf("Foreman satellite connecting to %s", satelliteURL())
+		if err := runSatellite(context.Background(), satelliteURL()); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	addr := os.Getenv("FOREMAN_ADDR")
 	if addr == "" {
 		addr = ":4040"
@@ -506,6 +732,7 @@ func main() {
 	}
 
 	app := newApp(herdrClient{socket: socketPath()})
+	app.configureSettings(settingsPath())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go app.monitor(ctx)
@@ -521,7 +748,13 @@ func main() {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("/ws", app.serveWebSocket)
-	mux.Handle("/", http.FileServerFS(assets))
+	mux.HandleFunc("/satellite", app.serveSatellite)
+	mux.HandleFunc("/api/settings", app.serveSettings)
+	fileServer := http.FileServerFS(assets)
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		fileServer.ServeHTTP(w, r)
+	}))
 
 	server := &http.Server{
 		Addr:              addr,

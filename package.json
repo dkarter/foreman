@@ -1,0 +1,21 @@
+{
+  "name": "foreman-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node_modules/esbuild/bin/esbuild frontend/app.tsx --bundle --minify --target=chrome120 --outfile=web/app.js",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "preact": "10.29.7"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.1",
+    "typescript": "7.0.2"
+  },
+  "aube": {
+    "allowBuilds": {
+      "esbuild": true
+    }
+  }
+}

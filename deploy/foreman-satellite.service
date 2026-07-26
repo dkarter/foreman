@@ -1,0 +1,13 @@
+[Unit]
+Description=Foreman Raspberry Pi resource reporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/foreman satellite
+Environment=FOREMAN_SERVER_URL=ws://air.local:4040/satellite
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

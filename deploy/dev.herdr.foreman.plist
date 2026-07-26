@@ -6,7 +6,7 @@
     <string>dev.herdr.foreman</string>
     <key>ProgramArguments</key>
     <array>
-      <string>/Users/dorian/dev/foreman/bin/foreman</string>
+      <string>__HOME__/Applications/Foreman.app/Contents/Resources/foreman-server</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
@@ -18,8 +18,8 @@
     <key>KeepAlive</key>
     <true />
     <key>StandardOutPath</key>
-    <string>/Users/dorian/Library/Logs/foreman.log</string>
+    <string>__HOME__/Library/Logs/foreman.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/dorian/Library/Logs/foreman.log</string>
+    <string>__HOME__/Library/Logs/foreman.log</string>
   </dict>
 </plist>

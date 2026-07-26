@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -12,27 +11,47 @@ import (
 	"time"
 )
 
-type resourceMetrics struct {
-	HostCPU       *float64 `json:"hostCpu"`
-	HostRAM       *float64 `json:"hostRam"`
-	ForemanCPU    *float64 `json:"foremanCpu"`
-	ForemanRAMMiB *float64 `json:"foremanRamMiB"`
+type systemMetrics struct {
+	CPU           *float64 `json:"cpu"`
+	RAM           *float64 `json:"ram"`
+	RAMUsedBytes  *uint64  `json:"ramUsedBytes"`
+	RAMTotalBytes *uint64  `json:"ramTotalBytes"`
 }
 
+type resourceMetrics struct {
+	Host             systemMetrics `json:"host"`
+	Foreman          systemMetrics `json:"foreman"`
+	ForemanConnected bool          `json:"foremanConnected"`
+}
+
+var hostMemoryTotal = sync.OnceValue(func() *uint64 {
+	output, err := exec.Command("sysctl", "-n", "hw.memsize").Output()
+	if err != nil {
+		return nil
+	}
+	total, err := strconv.ParseUint(strings.TrimSpace(string(output)), 10, 64)
+	if err != nil {
+		return nil
+	}
+	return uint64Value(total)
+})
+
 func (a *app) monitorMetrics(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
 	for {
-		a.updateMetrics(collectMetrics(ctx))
+		a.updateHostMetrics(collectHostMetrics(ctx))
+		timer := time.NewTimer(time.Duration(a.pollInterval()) * time.Second)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
+		case <-a.settingsChanged:
+			timer.Stop()
+		case <-timer.C:
 		}
 	}
 }
 
-func collectMetrics(parent context.Context) resourceMetrics {
+func collectHostMetrics(parent context.Context) systemMetrics {
 	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 	defer cancel()
 
@@ -43,7 +62,6 @@ func collectMetrics(parent context.Context) resourceMetrics {
 	commands := [][]string{
 		{"ps", "-A", "-o", "%cpu="},
 		{"memory_pressure", "-Q"},
-		{"ps", "-p", strconv.Itoa(os.Getpid()), "-o", "%cpu=,rss="},
 	}
 	results := make([]commandResult, len(commands))
 	var wait sync.WaitGroup
@@ -56,21 +74,27 @@ func collectMetrics(parent context.Context) resourceMetrics {
 	}
 	wait.Wait()
 
-	var metrics resourceMetrics
+	var metrics systemMetrics
 	if cpu, ok := parseCPUList(string(results[0].output)); results[0].err == nil && ok {
-		metrics.HostCPU = metricValue(cpu / float64(runtime.NumCPU()))
+		metrics.CPU = floatValue(cpu / float64(runtime.NumCPU()))
 	}
 	if ram, ok := parseMemoryPressure(string(results[1].output)); results[1].err == nil && ok {
-		metrics.HostRAM = metricValue(ram)
+		metrics.RAM = floatValue(ram)
 	}
-	if cpu, ram, ok := parseProcessMetrics(string(results[2].output)); results[2].err == nil && ok {
-		metrics.ForemanCPU = metricValue(cpu)
-		metrics.ForemanRAMMiB = metricValue(ram)
+	if total := hostMemoryTotal(); total != nil {
+		metrics.RAMTotalBytes = total
+		if metrics.RAM != nil {
+			metrics.RAMUsedBytes = uint64Value(uint64(float64(*total) * *metrics.RAM / 100))
+		}
 	}
 	return metrics
 }
 
-func metricValue(value float64) *float64 {
+func floatValue(value float64) *float64 {
+	return &value
+}
+
+func uint64Value(value uint64) *uint64 {
 	return &value
 }
 
@@ -100,14 +124,4 @@ func parseMemoryPressure(output string) (float64, bool) {
 		}
 	}
 	return 0, false
-}
-
-func parseProcessMetrics(output string) (cpu float64, ramMiB float64, ok bool) {
-	fields := strings.Fields(output)
-	if len(fields) != 2 {
-		return 0, 0, false
-	}
-	cpu, cpuErr := strconv.ParseFloat(fields[0], 64)
-	rssKiB, ramErr := strconv.ParseFloat(fields[1], 64)
-	return cpu, rssKiB / 1024, cpuErr == nil && ramErr == nil
 }
