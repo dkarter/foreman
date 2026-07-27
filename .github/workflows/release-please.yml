@@ -68,7 +68,10 @@ jobs:
           node-version: '24.18.0'
 
       - name: Install aube
-        run: npm install --global aube@1.29.1
+        # v4.2.3 is an immutable GitHub release.
+        uses: jdx/mise-action@v4.2.3
+        with:
+          install_args: aube
 
       - name: Install frontend dependencies
         run: aube install --frozen-lockfile
@@ -121,7 +124,10 @@ jobs:
           node-version: '24.18.0'
 
       - name: Install aube
-        run: npm install --global aube@1.29.1
+        # v4.2.3 is an immutable GitHub release.
+        uses: jdx/mise-action@v4.2.3
+        with:
+          install_args: aube
 
       - name: Install frontend dependencies
         run: aube install --frozen-lockfile
