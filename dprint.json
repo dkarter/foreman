@@ -28,6 +28,7 @@
   },
   "excludes": [
     "**/node_modules",
+    ".playwright-mcp/**",
     "web/app.js",
     "aube-lock.yaml",
     "**/*-lock.json",
