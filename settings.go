@@ -9,6 +9,16 @@ import (
 
 const defaultPollInterval = 5
 const defaultTerminalApp = "com.mitchellh.ghostty"
+const defaultBackground = "grid"
+
+var backgrounds = map[string]bool{
+	"grid":    true,
+	"aurora":  true,
+	"embers":  true,
+	"topo":    true,
+	"eclipse": true,
+	"rain":    true,
+}
 
 var terminalApps = map[string]bool{
 	"":                       true,
@@ -21,16 +31,22 @@ type appSettings struct {
 	PollIntervalSeconds int    `json:"pollIntervalSeconds"`
 	CompactMode         bool   `json:"compactMode"`
 	TerminalApp         string `json:"terminalApp"`
+	Background          string `json:"background"`
 }
 
 type settingsUpdate struct {
 	PollIntervalSeconds *int    `json:"pollIntervalSeconds"`
 	CompactMode         *bool   `json:"compactMode"`
 	TerminalApp         *string `json:"terminalApp"`
+	Background          *string `json:"background"`
 }
 
 func defaultSettings() appSettings {
-	return appSettings{PollIntervalSeconds: defaultPollInterval, TerminalApp: defaultTerminalApp}
+	return appSettings{
+		PollIntervalSeconds: defaultPollInterval,
+		TerminalApp:         defaultTerminalApp,
+		Background:          defaultBackground,
+	}
 }
 
 func validPollInterval(seconds int) bool {
@@ -41,14 +57,24 @@ func validTerminalApp(bundleID string) bool {
 	return terminalApps[bundleID]
 }
 
+func validBackground(background string) bool {
+	return backgrounds[background]
+}
+
 func loadSettings(path string) appSettings {
 	settings := defaultSettings()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return settings
 	}
-	if json.Unmarshal(data, &settings) != nil || !validPollInterval(settings.PollIntervalSeconds) ||
-		!validTerminalApp(settings.TerminalApp) {
+	if json.Unmarshal(data, &settings) != nil {
+		return defaultSettings()
+	}
+	if settings.Background == "radar" {
+		settings.Background = defaultBackground
+	}
+	if !validPollInterval(settings.PollIntervalSeconds) ||
+		!validTerminalApp(settings.TerminalApp) || !validBackground(settings.Background) {
 		return defaultSettings()
 	}
 	return settings
@@ -60,6 +86,9 @@ func saveSettings(path string, settings appSettings) error {
 	}
 	if !validTerminalApp(settings.TerminalApp) {
 		return errors.New("terminal app is not supported")
+	}
+	if !validBackground(settings.Background) {
+		return errors.New("background is not supported")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

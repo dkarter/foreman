@@ -8,6 +8,8 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
 type AgentStatus = "working" | "blocked" | "done" | "idle";
 const agentStatuses: AgentStatus[] = ["working", "blocked", "done", "idle"];
+const backgrounds = ["grid", "aurora", "embers", "topo", "eclipse", "rain"] as const;
+type Background = (typeof backgrounds)[number];
 
 interface Agent {
   paneId: string;
@@ -36,6 +38,7 @@ interface Settings {
   pollIntervalSeconds: 5 | 10 | 30 | 60;
   compactMode: boolean;
   terminalApp: string;
+  background: Background;
 }
 
 interface DashboardState {
@@ -83,7 +86,7 @@ const initialState: DashboardState = {
   connected: false,
   agents: [],
   metrics: { host: emptyMetrics, foreman: emptyMetrics, foremanConnected: false },
-  settings: { pollIntervalSeconds: 5, compactMode: false, terminalApp: "" },
+  settings: { pollIntervalSeconds: 5, compactMode: false, terminalApp: "", background: "grid" },
 };
 
 const previewAgents: Agent[] = previewStatuses.map((status, index) => ({
@@ -276,6 +279,15 @@ function App() {
   useEffect(() => {
     document.body.classList.toggle("compact-mode", state.settings.compactMode);
   }, [state.settings.compactMode]);
+
+  useEffect(() => {
+    for (const background of backgrounds) {
+      document.body.classList.toggle(
+        `background-${background}`,
+        (state.settings.background || "grid") === background,
+      );
+    }
+  }, [state.settings.background]);
 
   useEffect(() => {
     if (kioskController && !selectedHostId && previewAgents.length === 0) {
@@ -491,6 +503,22 @@ function SettingsPanel(props: {
               onClick={() => props.onChange({ compactMode: compact })}
             >
               {compact ? "Compact" : "Standard"}
+            </button>
+          ))}
+        </div>
+      </SettingRow>
+      <SettingRow
+        title="Background"
+        description="Choose an animated control-room backdrop."
+      >
+        <div class="segmented-control background-control">
+          {backgrounds.map((background) => (
+            <button
+              type="button"
+              class={(props.settings.background || "grid") === background ? "active" : ""}
+              onClick={() => props.onChange({ background })}
+            >
+              {background}
             </button>
           ))}
         </div>

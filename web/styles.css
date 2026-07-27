@@ -44,6 +44,159 @@ body::after {
   animation: organism-drift 45s ease-in-out infinite alternate;
 }
 
+body.background-aurora {
+  background: #070b0e;
+}
+
+body.background-aurora::before {
+  inset: -12%;
+  background:
+    radial-gradient(ellipse at 20% 50%, rgba(49, 203, 161, 0.2), transparent 34%),
+    radial-gradient(ellipse at 76% 28%, rgba(81, 128, 230, 0.18), transparent 30%),
+    radial-gradient(ellipse at 55% 82%, rgba(120, 67, 190, 0.13), transparent 35%);
+  filter: blur(32px);
+  animation: aurora-drift 20s ease-in-out infinite alternate;
+}
+
+body.background-aurora::after {
+  background: repeating-linear-gradient(
+    108deg,
+    transparent 0 9%,
+    rgba(164, 237, 218, 0.025) 10%,
+    transparent 11% 20%
+  );
+  animation: aurora-shimmer 13s ease-in-out infinite alternate;
+}
+
+body.background-embers {
+  background: #0d0908;
+}
+
+body.background-embers::before {
+  inset: -160px;
+  background:
+    radial-gradient(circle, rgba(255, 183, 94, 0.7) 0 1px, transparent 1.5px),
+    radial-gradient(circle, rgba(255, 106, 72, 0.5) 0 1px, transparent 1.5px);
+  background-position: 0 0, 32px 58px;
+  background-size: 83px 97px, 119px 137px;
+  animation: ember-rise 12s ease-in-out infinite alternate;
+}
+
+body.background-embers::after {
+  background:
+    radial-gradient(ellipse at 18% 110%, rgba(255, 101, 50, 0.14), transparent 35%),
+    radial-gradient(ellipse at 78% 115%, rgba(255, 178, 72, 0.1), transparent 32%);
+  animation: ember-glow 6s ease-in-out infinite alternate;
+}
+
+body.background-topo {
+  background:
+    radial-gradient(circle at 28% 42%, rgba(107, 145, 78, 0.08), transparent 30%),
+    radial-gradient(circle at 72% 58%, rgba(65, 104, 78, 0.08), transparent 34%),
+    #090d0a;
+}
+
+body.background-topo::before,
+body.background-topo::after {
+  inset: -90px;
+  background-image: url("/assets/topography.svg");
+  background-position: center;
+  background-size: 960px 640px;
+}
+
+body.background-topo::before {
+  opacity: 0.8;
+  animation: topo-drift 32s ease-in-out infinite alternate;
+}
+
+body.background-topo::after {
+  background-position: calc(50% + 480px) calc(50% + 320px);
+  opacity: 0.24;
+  transform: scale(1.14) rotate(1deg);
+  animation: topo-counter-drift 40s ease-in-out infinite alternate;
+}
+
+body.background-eclipse {
+  background: #07070d;
+}
+
+body.background-eclipse::before {
+  inset: auto;
+  top: 50%;
+  left: 50%;
+  width: min(82vmin, 720px);
+  height: min(82vmin, 720px);
+  border-radius: 50%;
+  background: conic-gradient(
+    from 20deg,
+    transparent 0 8%,
+    rgba(111, 70, 255, 0.6) 14%,
+    rgba(255, 86, 115, 0.75) 20%,
+    rgba(255, 180, 84, 0.4) 24%,
+    transparent 32% 62%,
+    rgba(69, 153, 255, 0.35) 72%,
+    transparent 84%
+  );
+  filter: blur(7px);
+  mask: radial-gradient(circle, transparent 0 29%, #000 33% 40%, transparent 49%);
+  transform: translate(-50%, -50%);
+  animation: eclipse-orbit 24s linear infinite;
+}
+
+body.background-eclipse::after {
+  inset: -80px;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(1, 1, 4, 0.96) 0 11%, transparent 24%),
+    radial-gradient(circle, rgba(215, 221, 255, 0.65) 0 0.7px, transparent 1px),
+    radial-gradient(circle, rgba(137, 158, 255, 0.45) 0 0.7px, transparent 1px);
+  background-position: center, 0 0, 37px 63px;
+  background-size: auto, 91px 103px, 137px 151px;
+  animation: eclipse-stars 18s ease-in-out infinite alternate;
+}
+
+body.background-rain {
+  background:
+    radial-gradient(ellipse at 50% -15%, rgba(117, 146, 165, 0.14), transparent 48%),
+    linear-gradient(180deg, #091116, #04090c 72%);
+}
+
+body.background-rain::before,
+body.background-rain::after {
+  inset: -240px -120px;
+  transform: rotate(-7deg);
+}
+
+body.background-rain::before {
+  background:
+    radial-gradient(
+      ellipse 0.65px 21px at center,
+      rgba(173, 205, 219, 0.28) 0 55%,
+      transparent 100%
+    ) 0 0 / 37px 180px,
+    radial-gradient(ellipse 0.55px 14px at center, rgba(145, 185, 204, 0.2) 0 50%, transparent 100%)
+    17px 43px / 61px 180px,
+    radial-gradient(
+    ellipse 0.45px 10px at center,
+    rgba(193, 218, 229, 0.15) 0 45%,
+    transparent 100%
+  ) 39px 11px / 89px 180px;
+  opacity: 0.72;
+  animation: rain-far 3.8s linear infinite;
+}
+
+body.background-rain::after {
+  background:
+    radial-gradient(ellipse 0.9px 34px at center, rgba(211, 230, 237, 0.38) 0 58%, transparent 100%)
+    8px 0 / 79px 240px,
+    radial-gradient(
+    ellipse 0.75px 25px at center,
+    rgba(155, 195, 212, 0.28) 0 52%,
+    transparent 100%
+  ) 51px 79px / 113px 240px;
+  opacity: 0.65;
+  animation: rain-near 2.3s linear infinite;
+}
+
 button {
   font: inherit;
 }
@@ -569,10 +722,12 @@ footer time {
 }
 
 .segmented-control button + button {
-  border-left: 0;
+  margin-left: -1px;
 }
 
 .segmented-control button.active {
+  position: relative;
+  z-index: 1;
   border-color: #48d597;
   background: rgba(72, 213, 151, 0.14);
   color: #72e5b1;
@@ -777,6 +932,94 @@ footer time {
   }
 }
 
+@keyframes aurora-drift {
+  from {
+    transform: translate(-4%, -3%) rotate(-3deg) scale(0.96);
+  }
+  to {
+    transform: translate(4%, 3%) rotate(4deg) scale(1.08);
+  }
+}
+
+@keyframes aurora-shimmer {
+  from {
+    transform: translateX(-3%);
+    opacity: 0.35;
+  }
+  to {
+    transform: translateX(3%);
+    opacity: 0.9;
+  }
+}
+
+@keyframes ember-rise {
+  to {
+    transform: translate(10px, -80px);
+  }
+}
+
+@keyframes topo-drift {
+  from {
+    transform: translate(-28px, -18px) scale(1.02);
+  }
+  to {
+    transform: translate(42px, 24px) scale(1.08);
+  }
+}
+
+@keyframes topo-counter-drift {
+  from {
+    transform: translate(18px, 10px) rotate(1deg) scale(1.14);
+  }
+  to {
+    transform: translate(-34px, -22px) rotate(-1deg) scale(1.2);
+  }
+}
+
+@keyframes eclipse-orbit {
+  from {
+    transform: translate(-50%, -50%) rotate(0deg) scale(0.95);
+  }
+  50% {
+    transform: translate(-50%, -50%) rotate(180deg) scale(1.06);
+  }
+  to {
+    transform: translate(-50%, -50%) rotate(360deg) scale(0.95);
+  }
+}
+
+@keyframes eclipse-stars {
+  to {
+    transform: translate(16px, -12px) scale(1.03);
+    opacity: 0.72;
+  }
+}
+
+@keyframes rain-far {
+  from {
+    transform: rotate(-7deg) translateY(-180px);
+  }
+  to {
+    transform: rotate(-7deg) translateY(180px);
+  }
+}
+
+@keyframes rain-near {
+  from {
+    transform: rotate(-7deg) translateY(-240px);
+  }
+  to {
+    transform: rotate(-7deg) translateY(240px);
+  }
+}
+
+@keyframes ember-glow {
+  to {
+    transform: scale(1.08);
+    opacity: 0.72;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .agent-card,
   body::before,
@@ -819,12 +1062,40 @@ footer time {
     grid-template-columns: 1fr;
   }
 
+  .setting-row {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .segmented-control {
+    width: 100%;
+  }
+
+  .segmented-control button {
+    flex: 1;
+    padding: 0 8px;
+  }
+
   .compact-mode .agent-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 430px) {
+  .background-control {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .background-control button:nth-child(n+4) {
+    margin-top: -1px;
+  }
+
+  .background-control button:nth-child(3n+1) {
+    margin-left: 0;
+  }
+
   h1 {
     font-size: 25px;
   }

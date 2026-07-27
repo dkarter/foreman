@@ -228,20 +228,26 @@ func TestSettingsPersist(t *testing.T) {
 	poll := 30
 	compact := true
 	terminal := "com.github.wez.wezterm"
+	background := "aurora"
 	if err := app.applySettings(settingsUpdate{
 		PollIntervalSeconds: &poll,
 		CompactMode:         &compact,
 		TerminalApp:         &terminal,
+		Background:          &background,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if got := loadSettings(path); got.PollIntervalSeconds != 30 || !got.CompactMode ||
-		got.TerminalApp != terminal {
+		got.TerminalApp != terminal || got.Background != background {
 		t.Fatalf("unexpected persisted settings: %#v", got)
 	}
 	unsupported := "com.example.terminal"
 	if err := app.applySettings(settingsUpdate{TerminalApp: &unsupported}); err == nil {
 		t.Fatal("unsupported terminal app should be rejected")
+	}
+	unsupportedBackground := "matrix"
+	if err := app.applySettings(settingsUpdate{Background: &unsupportedBackground}); err == nil {
+		t.Fatal("unsupported background should be rejected")
 	}
 }
 
@@ -253,7 +259,22 @@ func TestLoadSettingsAddsDefaultTerminalToExistingSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	settings := loadSettings(path)
-	if settings.TerminalApp != defaultTerminalApp || settings.PollIntervalSeconds != 10 ||
+	if settings.TerminalApp != defaultTerminalApp || settings.Background != defaultBackground ||
+		settings.PollIntervalSeconds != 10 ||
+		!settings.CompactMode {
+		t.Fatalf("unexpected migrated settings: %#v", settings)
+	}
+}
+
+func TestLoadSettingsMigratesRemovedRadarBackground(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"pollIntervalSeconds":30,"compactMode":true,"background":"radar"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	settings := loadSettings(path)
+	if settings.Background != defaultBackground || settings.PollIntervalSeconds != 30 ||
 		!settings.CompactMode {
 		t.Fatalf("unexpected migrated settings: %#v", settings)
 	}

@@ -425,6 +425,12 @@ func (a *app) applySettings(update settingsUpdate) error {
 		}
 		next.TerminalApp = *update.TerminalApp
 	}
+	if update.Background != nil {
+		if !validBackground(*update.Background) {
+			return fmt.Errorf("background is not supported")
+		}
+		next.Background = *update.Background
+	}
 	if next == previous {
 		return nil
 	}
