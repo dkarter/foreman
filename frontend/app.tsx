@@ -8,8 +8,35 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
 type AgentStatus = "working" | "blocked" | "done" | "idle";
 const agentStatuses: AgentStatus[] = ["working", "blocked", "done", "idle"];
-const backgrounds = ["grid", "aurora", "embers", "topo", "eclipse", "rain"] as const;
+const backgrounds = [
+  "grid",
+  "aurora",
+  "embers",
+  "topo",
+  "eclipse",
+  "rain",
+  "tesseract",
+  "drive",
+] as const;
 type Background = (typeof backgrounds)[number];
+const themes = ["default", "catppuccin", "tokyo-night", "dracula", "nord", "gruvbox"] as const;
+type Theme = (typeof themes)[number];
+const themeAccents: Record<Theme, string> = {
+  default: "#48d597",
+  catppuccin: "#cba6f7",
+  "tokyo-night": "#7aa2f7",
+  dracula: "#bd93f9",
+  nord: "#88c0d0",
+  gruvbox: "#b8bb26",
+};
+const themeLabels: Record<Theme, string> = {
+  default: "Default",
+  catppuccin: "Catppuccin",
+  "tokyo-night": "Tokyo Night",
+  dracula: "Dracula",
+  nord: "Nord",
+  gruvbox: "Gruvbox",
+};
 
 interface Agent {
   paneId: string;
@@ -39,6 +66,13 @@ interface Settings {
   compactMode: boolean;
   terminalApp: string;
   background: Background;
+  theme: Theme;
+  accentColor: string;
+}
+
+function resolveAppearance(settings: Pick<Settings, "theme" | "accentColor">) {
+  const theme = settings.theme || "default";
+  return { theme, accentColor: settings.accentColor || themeAccents[theme] };
 }
 
 interface DashboardState {
@@ -86,7 +120,14 @@ const initialState: DashboardState = {
   connected: false,
   agents: [],
   metrics: { host: emptyMetrics, foreman: emptyMetrics, foremanConnected: false },
-  settings: { pollIntervalSeconds: 5, compactMode: false, terminalApp: "", background: "grid" },
+  settings: {
+    pollIntervalSeconds: 5,
+    compactMode: false,
+    terminalApp: "",
+    background: "grid",
+    theme: "default",
+    accentColor: "",
+  },
 };
 
 const previewAgents: Agent[] = previewStatuses.map((status, index) => ({
@@ -275,6 +316,7 @@ function App() {
     updateSettings,
   } = useForemanSocket(showToast);
   const agents = previewAgents.length > 0 ? previewAgents : state.agents;
+  const { theme, accentColor } = resolveAppearance(state.settings);
 
   useEffect(() => {
     document.body.classList.toggle("compact-mode", state.settings.compactMode);
@@ -290,6 +332,14 @@ function App() {
   }, [state.settings.background]);
 
   useEffect(() => {
+    for (const option of themes) {
+      document.body.classList.toggle(`theme-${option}`, theme === option);
+    }
+    document.documentElement.style.setProperty("--accent", accentColor);
+    document.documentElement.style.setProperty("--accent-rgb", hexToRGB(accentColor).join(" "));
+  }, [accentColor, theme]);
+
+  useEffect(() => {
     if (kioskController && !selectedHostId && previewAgents.length === 0) {
       location.assign("/choose");
     }
@@ -297,6 +347,7 @@ function App() {
 
   return (
     <>
+      <BackgroundScene background={state.settings.background || "grid"} accentColor={accentColor} />
       <main class="shell">
         <Header
           agents={agents}
@@ -337,6 +388,217 @@ function App() {
       <CloseDialog open={closeOpen} onCancel={() => setCloseOpen(false)} onFailure={showToast} />
     </>
   );
+}
+
+function BackgroundScene(
+  { background, accentColor }: { background: Background; accentColor: string },
+) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const active = background === "tesseract" || background === "drive";
+
+  useEffect(() => {
+    if (!active) return;
+    const element = canvas.current;
+    const context = element?.getContext("2d");
+    if (!element || !context) return;
+
+    const motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let reducedMotion = motionPreference.matches;
+    const color = hexToRGB(accentColor);
+    let frame = 0;
+    let lastPaint = -Infinity;
+    let stopped = false;
+
+    const paint = (time: number) => {
+      if (stopped || document.hidden) return;
+      if (time - lastPaint >= 1000 / 30 || reducedMotion) {
+        const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+        const width = element.clientWidth;
+        const height = element.clientHeight;
+        if (
+          element.width !== Math.round(width * ratio)
+          || element.height !== Math.round(height * ratio)
+        ) {
+          element.width = Math.round(width * ratio);
+          element.height = Math.round(height * ratio);
+        }
+        context.setTransform(ratio, 0, 0, ratio, 0, 0);
+        context.clearRect(0, 0, width, height);
+        if (background === "tesseract") drawTesseract(context, width, height, time, color);
+        else drawDrive(context, width, height, time, color);
+        lastPaint = time;
+      }
+      if (!reducedMotion) frame = requestAnimationFrame(paint);
+    };
+    const repaint = () => {
+      cancelAnimationFrame(frame);
+      if (!document.hidden && !stopped) frame = requestAnimationFrame(paint);
+    };
+    const updateMotion = () => {
+      reducedMotion = motionPreference.matches;
+      repaint();
+    };
+
+    document.addEventListener("visibilitychange", repaint);
+    window.addEventListener("resize", repaint);
+    motionPreference.addEventListener("change", updateMotion);
+    frame = requestAnimationFrame(paint);
+    return () => {
+      stopped = true;
+      cancelAnimationFrame(frame);
+      context.clearRect(0, 0, element.width, element.height);
+      element.width = 0;
+      element.height = 0;
+      document.removeEventListener("visibilitychange", repaint);
+      window.removeEventListener("resize", repaint);
+      motionPreference.removeEventListener("change", updateMotion);
+    };
+  }, [accentColor, active, background]);
+
+  return active ? <canvas ref={canvas} class="background-scene" aria-hidden="true" /> : null;
+}
+
+function drawTesseract(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  time: number,
+  color: [number, number, number],
+) {
+  const angle = time * 0.00022;
+  const cosAngle = Math.cos(angle);
+  const sinAngle = Math.sin(angle);
+  const cosYZ = Math.cos(angle * 0.73);
+  const sinYZ = Math.sin(angle * 0.73);
+  const cosXY = Math.cos(angle * 0.41);
+  const sinXY = Math.sin(angle * 0.41);
+  const vertices = Array.from({ length: 16 }, (_, index) => {
+    let x = index & 1 ? 1 : -1;
+    let y = index & 2 ? 1 : -1;
+    let z = index & 4 ? 1 : -1;
+    let w = index & 8 ? 1 : -1;
+    const xwX = x * cosAngle - w * sinAngle;
+    w = x * sinAngle + w * cosAngle;
+    x = xwX;
+    const yzY = y * cosYZ - z * sinYZ;
+    z = y * sinYZ + z * cosYZ;
+    y = yzY;
+    const xyX = x * cosXY - y * sinXY;
+    y = x * sinXY + y * cosXY;
+    x = xyX;
+    const projection4D = 2.6 / (3.5 - w);
+    x *= projection4D;
+    y *= projection4D;
+    z *= projection4D;
+    const projection3D = Math.min(width, height) * 0.2 / (3.8 - z);
+    return {
+      x: width / 2 + x * projection3D * 3,
+      y: height / 2 + y * projection3D * 3,
+      depth: z,
+    };
+  });
+
+  context.lineWidth = 1.25;
+  context.shadowBlur = 10;
+  context.shadowColor = `rgb(${color.join(" ")} / 0.7)`;
+  for (let start = 0; start < vertices.length; start++) {
+    for (let dimension = 0; dimension < 4; dimension++) {
+      const end = start ^ (1 << dimension);
+      if (end < start) continue;
+      const alpha = Math.max(
+        0.2,
+        Math.min(0.8, 0.48 + (vertices[start].depth + vertices[end].depth) * 0.08),
+      );
+      context.strokeStyle = `rgb(${color.join(" ")} / ${alpha})`;
+      context.beginPath();
+      context.moveTo(vertices[start].x, vertices[start].y);
+      context.lineTo(vertices[end].x, vertices[end].y);
+      context.stroke();
+    }
+  }
+  context.shadowBlur = 0;
+}
+
+function drawDrive(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  time: number,
+  color: [number, number, number],
+) {
+  const horizon = height * 0.37;
+  const bottom = height * 1.04;
+  const phase = (time * 0.00022) % 1;
+  const roadWidth = (depth: number) => width * (0.035 + depth ** 1.65 * 0.48);
+  const roadY = (depth: number) => horizon + depth ** 2.1 * (bottom - horizon);
+
+  const sky = context.createLinearGradient(0, 0, 0, horizon);
+  sky.addColorStop(0, "rgb(3 6 10 / 0.15)");
+  sky.addColorStop(1, `rgb(${color.join(" ")} / 0.1)`);
+  context.fillStyle = sky;
+  context.fillRect(0, 0, width, horizon + 1);
+
+  context.fillStyle = "rgb(0 0 0 / 0.28)";
+  context.beginPath();
+  context.moveTo(width / 2 - roadWidth(0), horizon);
+  context.lineTo(width / 2 + roadWidth(0), horizon);
+  context.lineTo(width / 2 + roadWidth(1), bottom);
+  context.lineTo(width / 2 - roadWidth(1), bottom);
+  context.closePath();
+  context.fill();
+
+  context.strokeStyle = `rgb(${color.join(" ")} / 0.5)`;
+  context.lineWidth = 1.2;
+  for (const side of [-1, 1]) {
+    context.beginPath();
+    context.moveTo(width / 2 + side * roadWidth(0), horizon);
+    context.lineTo(width / 2 + side * roadWidth(1), bottom);
+    context.stroke();
+  }
+
+  for (let index = 0; index < 22; index++) {
+    const depth = (index / 22 + phase) % 1;
+    const next = Math.min(1, depth + 0.035 + depth * 0.035);
+    if (next < depth) continue;
+    for (const lane of [-0.34, 0.34]) {
+      context.fillStyle = `rgb(${color.join(" ")} / ${0.15 + depth * 0.55})`;
+      context.beginPath();
+      context.moveTo(width / 2 + lane * roadWidth(depth), roadY(depth));
+      context.lineTo(width / 2 + lane * roadWidth(next), roadY(next));
+      context.lineTo(width / 2 + lane * roadWidth(next) + 1 + depth * 2, roadY(next));
+      context.lineTo(width / 2 + lane * roadWidth(depth) + 0.5, roadY(depth));
+      context.fill();
+    }
+  }
+
+  context.strokeStyle = `rgb(${color.join(" ")} / 0.2)`;
+  context.lineWidth = 1;
+  for (let index = 0; index < 16; index++) {
+    const depth = (index / 16 + phase) % 1;
+    const y = roadY(depth);
+    context.beginPath();
+    context.moveTo(width / 2 - roadWidth(depth), y);
+    context.lineTo(width / 2 + roadWidth(depth), y);
+    context.stroke();
+  }
+
+  const glow = context.createRadialGradient(
+    width / 2,
+    horizon,
+    0,
+    width / 2,
+    horizon,
+    width * 0.22,
+  );
+  glow.addColorStop(0, `rgb(${color.join(" ")} / 0.3)`);
+  glow.addColorStop(1, `rgb(${color.join(" ")} / 0)`);
+  context.save();
+  context.beginPath();
+  context.rect(0, 0, width, horizon);
+  context.clip();
+  context.fillStyle = glow;
+  context.fillRect(0, horizon - width * 0.22, width, width * 0.44);
+  context.restore();
 }
 
 function Header(props: {
@@ -482,6 +744,7 @@ function SettingsPanel(props: {
   onSwitch: () => void;
   local: boolean;
 }) {
+  const { theme, accentColor } = resolveAppearance(props.settings);
   return (
     <section class="settings-panel">
       <div class="settings-heading">
@@ -521,6 +784,39 @@ function SettingsPanel(props: {
               {background}
             </button>
           ))}
+        </div>
+      </SettingRow>
+      <SettingRow
+        title="Color theme"
+        description="Apply a curated palette across the dashboard."
+      >
+        <div class="segmented-control theme-control">
+          {themes.map((option) => (
+            <button
+              type="button"
+              class={theme === option ? "active" : ""}
+              onClick={() => props.onChange({ theme: option, accentColor: "" })}
+            >
+              {themeLabels[option]}
+            </button>
+          ))}
+        </div>
+      </SettingRow>
+      <SettingRow
+        title="Accent color"
+        description="Override the selected theme's primary color."
+      >
+        <div class="accent-control">
+          <input
+            type="color"
+            aria-label="Custom accent color"
+            value={accentColor}
+            onChange={(event) => props.onChange({ accentColor: event.currentTarget.value })}
+          />
+          <code>{accentColor.toUpperCase()}</code>
+          <button type="button" onClick={() => props.onChange({ accentColor: "" })}>
+            Reset
+          </button>
         </div>
       </SettingRow>
       <SettingRow
@@ -829,6 +1125,15 @@ function formatTime() {
   return new Intl.DateTimeFormat([], { hour: "2-digit", minute: "2-digit", hour12: false }).format(
     new Date(),
   );
+}
+
+function hexToRGB(color: string): [number, number, number] {
+  const normalized = /^#[0-9a-f]{6}$/i.test(color) ? color : themeAccents.default;
+  return [
+    Number.parseInt(normalized.slice(1, 3), 16),
+    Number.parseInt(normalized.slice(3, 5), 16),
+    Number.parseInt(normalized.slice(5, 7), 16),
+  ];
 }
 
 render(<App />, document.querySelector("#app")!);

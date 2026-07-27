@@ -229,16 +229,21 @@ func TestSettingsPersist(t *testing.T) {
 	compact := true
 	terminal := "com.github.wez.wezterm"
 	background := "aurora"
+	theme := "tokyo-night"
+	accent := "#7aa2f7"
 	if err := app.applySettings(settingsUpdate{
 		PollIntervalSeconds: &poll,
 		CompactMode:         &compact,
 		TerminalApp:         &terminal,
 		Background:          &background,
+		Theme:               &theme,
+		AccentColor:         &accent,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if got := loadSettings(path); got.PollIntervalSeconds != 30 || !got.CompactMode ||
-		got.TerminalApp != terminal || got.Background != background {
+		got.TerminalApp != terminal || got.Background != background || got.Theme != theme ||
+		got.AccentColor != accent {
 		t.Fatalf("unexpected persisted settings: %#v", got)
 	}
 	unsupported := "com.example.terminal"
@@ -248,6 +253,14 @@ func TestSettingsPersist(t *testing.T) {
 	unsupportedBackground := "matrix"
 	if err := app.applySettings(settingsUpdate{Background: &unsupportedBackground}); err == nil {
 		t.Fatal("unsupported background should be rejected")
+	}
+	unsupportedTheme := "comic-sans"
+	if err := app.applySettings(settingsUpdate{Theme: &unsupportedTheme}); err == nil {
+		t.Fatal("unsupported theme should be rejected")
+	}
+	invalidAccent := "blue"
+	if err := app.applySettings(settingsUpdate{AccentColor: &invalidAccent}); err == nil {
+		t.Fatal("invalid accent color should be rejected")
 	}
 }
 
@@ -260,6 +273,7 @@ func TestLoadSettingsAddsDefaultTerminalToExistingSettings(t *testing.T) {
 	}
 	settings := loadSettings(path)
 	if settings.TerminalApp != defaultTerminalApp || settings.Background != defaultBackground ||
+		settings.Theme != defaultTheme || settings.AccentColor != "" ||
 		settings.PollIntervalSeconds != 10 ||
 		!settings.CompactMode {
 		t.Fatalf("unexpected migrated settings: %#v", settings)

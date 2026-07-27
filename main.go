@@ -431,6 +431,18 @@ func (a *app) applySettings(update settingsUpdate) error {
 		}
 		next.Background = *update.Background
 	}
+	if update.Theme != nil {
+		if !validTheme(*update.Theme) {
+			return fmt.Errorf("theme is not supported")
+		}
+		next.Theme = *update.Theme
+	}
+	if update.AccentColor != nil {
+		if !validAccentColor(*update.AccentColor) {
+			return fmt.Errorf("accent color must be a six-digit hex color")
+		}
+		next.AccentColor = *update.AccentColor
+	}
 	if next == previous {
 		return nil
 	}

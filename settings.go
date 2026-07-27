@@ -10,14 +10,26 @@ import (
 const defaultPollInterval = 5
 const defaultTerminalApp = "com.mitchellh.ghostty"
 const defaultBackground = "grid"
+const defaultTheme = "default"
 
 var backgrounds = map[string]bool{
-	"grid":    true,
-	"aurora":  true,
-	"embers":  true,
-	"topo":    true,
-	"eclipse": true,
-	"rain":    true,
+	"grid":      true,
+	"aurora":    true,
+	"embers":    true,
+	"topo":      true,
+	"eclipse":   true,
+	"rain":      true,
+	"tesseract": true,
+	"drive":     true,
+}
+
+var themes = map[string]bool{
+	"default":     true,
+	"catppuccin":  true,
+	"tokyo-night": true,
+	"dracula":     true,
+	"nord":        true,
+	"gruvbox":     true,
 }
 
 var terminalApps = map[string]bool{
@@ -32,6 +44,8 @@ type appSettings struct {
 	CompactMode         bool   `json:"compactMode"`
 	TerminalApp         string `json:"terminalApp"`
 	Background          string `json:"background"`
+	Theme               string `json:"theme"`
+	AccentColor         string `json:"accentColor"`
 }
 
 type settingsUpdate struct {
@@ -39,6 +53,8 @@ type settingsUpdate struct {
 	CompactMode         *bool   `json:"compactMode"`
 	TerminalApp         *string `json:"terminalApp"`
 	Background          *string `json:"background"`
+	Theme               *string `json:"theme"`
+	AccentColor         *string `json:"accentColor"`
 }
 
 func defaultSettings() appSettings {
@@ -46,6 +62,7 @@ func defaultSettings() appSettings {
 		PollIntervalSeconds: defaultPollInterval,
 		TerminalApp:         defaultTerminalApp,
 		Background:          defaultBackground,
+		Theme:               defaultTheme,
 	}
 }
 
@@ -61,6 +78,27 @@ func validBackground(background string) bool {
 	return backgrounds[background]
 }
 
+func validTheme(theme string) bool {
+	return themes[theme]
+}
+
+func validAccentColor(color string) bool {
+	if color == "" {
+		return true
+	}
+	if len(color) != 7 || color[0] != '#' {
+		return false
+	}
+	for _, character := range color[1:] {
+		if !((character >= '0' && character <= '9') ||
+			(character >= 'a' && character <= 'f') ||
+			(character >= 'A' && character <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
 func loadSettings(path string) appSettings {
 	settings := defaultSettings()
 	data, err := os.ReadFile(path)
@@ -74,7 +112,8 @@ func loadSettings(path string) appSettings {
 		settings.Background = defaultBackground
 	}
 	if !validPollInterval(settings.PollIntervalSeconds) ||
-		!validTerminalApp(settings.TerminalApp) || !validBackground(settings.Background) {
+		!validTerminalApp(settings.TerminalApp) || !validBackground(settings.Background) ||
+		!validTheme(settings.Theme) || !validAccentColor(settings.AccentColor) {
 		return defaultSettings()
 	}
 	return settings
@@ -89,6 +128,12 @@ func saveSettings(path string, settings appSettings) error {
 	}
 	if !validBackground(settings.Background) {
 		return errors.New("background is not supported")
+	}
+	if !validTheme(settings.Theme) {
+		return errors.New("theme is not supported")
+	}
+	if !validAccentColor(settings.AccentColor) {
+		return errors.New("accent color must be a six-digit hex color")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
