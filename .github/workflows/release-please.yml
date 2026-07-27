@@ -59,7 +59,7 @@ jobs:
         # v7.0.0 is an immutable GitHub release.
         uses: actions/setup-go@v7.0.0
         with:
-          go-version: '1.25.12'
+          go-version: '1.26.5'
 
       - name: Set up Node.js
         # v7.0.0 is an immutable GitHub release.
@@ -112,7 +112,7 @@ jobs:
         # v7.0.0 is an immutable GitHub release.
         uses: actions/setup-go@v7.0.0
         with:
-          go-version: '1.25.12'
+          go-version: '1.26.5'
 
       - name: Set up Node.js
         # v7.0.0 is an immutable GitHub release.
