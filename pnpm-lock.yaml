@@ -18,8 +18,8 @@ importers:
         specifier: 2.0.1
         version: 2.0.1
       preact:
-        specifier: 10.29.7
-        version: 10.29.7
+        specifier: 10.29.8
+        version: 10.29.8
     devDependencies:
       esbuild:
         specifier: 0.28.1
@@ -323,8 +323,8 @@ packages:
     engines: {node: '>=18'}
     hasBin: true
 
-  preact@10.29.7:
-    resolution: {integrity: sha512-DCHYrK/B10yUD3ZjLfhZ3WIE/9Vf9VFUODcRE2dRomTYDpJk6z6L9wecSfhfE6M9ZTHUdyQkoC46arIDhEV84Q==}
+  preact@10.29.8:
+    resolution: {integrity: sha512-ej2aVZ+vZ8WO7tvlQWRM9N63A0KzF9q4mWJfDUHgYaIofWY9hu74QdnQrjoPMmZi2/nZ5gN0bJCQF49xQqx09Q==}
     peerDependencies:
       preact-render-to-string: '>=5'
     peerDependenciesMeta:
@@ -513,7 +513,7 @@ snapshots:
       '@esbuild/win32-ia32': 0.28.1
       '@esbuild/win32-x64': 0.28.1
 
-  preact@10.29.7: {}
+  preact@10.29.8: {}
 
   typescript@7.0.2:
     optionalDependencies:
