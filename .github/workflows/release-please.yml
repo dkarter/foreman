@@ -69,7 +69,7 @@ jobs:
 
       - name: Install aube
         # v4.2.3 is an immutable GitHub release.
-        uses: jdx/mise-action@v4.2.3
+        uses: jdx/mise-action@v4.2.4
         with:
           install_args: aube
 
@@ -125,7 +125,7 @@ jobs:
 
       - name: Install aube
         # v4.2.3 is an immutable GitHub release.
-        uses: jdx/mise-action@v4.2.3
+        uses: jdx/mise-action@v4.2.4
         with:
           install_args: aube
 
