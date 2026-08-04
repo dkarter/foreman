@@ -7,7 +7,7 @@ gitleaks = "latest"
 go = "1.26.5"
 lefthook = "latest"
 pitchfork = "latest"
-node = "24.18.0"
+node = "24.19.0"
 "github:dmno-dev/varlock" = "1.13.0"
 
 [hooks]
