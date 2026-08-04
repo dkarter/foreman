@@ -88,7 +88,7 @@ jobs:
 
       - name: Attest binary artifacts
         # v4.2.0 is an immutable GitHub release.
-        uses: actions/attest@v4.2.0
+        uses: actions/attest@v4.2.2
         with:
           subject-path: |
             dist/*.tar.gz
@@ -142,7 +142,7 @@ jobs:
 
       - name: Attest macOS app
         # v4.2.0 is an immutable GitHub release.
-        uses: actions/attest@v4.2.0
+        uses: actions/attest@v4.2.2
         with:
           subject-path: dist/*.zip
 
