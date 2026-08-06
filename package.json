@@ -9,7 +9,7 @@
   "dependencies": {
     "@noble/ciphers": "2.2.0",
     "@noble/curves": "2.0.1",
-    "@noble/hashes": "2.0.1",
+    "@noble/hashes": "2.3.0",
     "preact": "10.29.7"
   },
   "devDependencies": {
