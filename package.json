@@ -7,7 +7,7 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
-    "@noble/ciphers": "2.2.0",
+    "@noble/ciphers": "2.3.0",
     "@noble/curves": "2.0.1",
     "@noble/hashes": "2.0.1",
     "preact": "10.29.7"
