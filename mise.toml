@@ -4,7 +4,7 @@
 dprint = "latest"
 fnox = "latest"
 gitleaks = "latest"
-go = "1.26.5"
+go = "1.27.1"
 lefthook = "latest"
 pitchfork = "latest"
 node = "24.18.0"
