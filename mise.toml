@@ -1,5 +1,5 @@
 [tools]
-"aube" = "1.33.1"
+"aube" = "1.41.0"
 "github:crate-ci/committed" = "latest"
 dprint = "latest"
 fnox = "latest"
